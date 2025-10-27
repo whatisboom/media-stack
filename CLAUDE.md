@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Self-hosted media automation stack using Docker Compose. Services work together to automate movie downloading, management, and streaming following [TRaSH Guides](https://trash-guides.info/) best practices.
+Self-hosted media automation stack using Docker Compose with VPN protection. Services work together to automate movie downloading, management, and streaming following [TRaSH Guides](https://trash-guides.info/) best practices.
+
+**Key Features:**
+- ✅ VPN-protected torrenting (NordVPN via gluetun)
+- ✅ TRaSH Guides compliant (hardlinks, proper paths)
+- ✅ Private tracker safe (DHT/LSD/PEX disabled)
+- ✅ Centralized indexer management (Prowlarr)
+- ✅ Reverse proxy with automatic HTTPS (Traefik + Let's Encrypt)
 
 ## Architecture
 
@@ -15,9 +22,9 @@ Overseerr (Requests)
     ↓
 Radarr (Movie Management) → Prowlarr (Indexer Management)
     ↓
-Deluge (Download Client)
-    ↓
-Plex (Media Streaming)
+Deluge (Download Client) ──→ Gluetun (VPN Container)
+    ↓                              ↓
+Plex (Media Streaming)      NordVPN (OpenVPN)
 ```
 
 **Request Flow:**
@@ -48,11 +55,31 @@ Plex (Media Streaming)
 
 ### Network Architecture
 
-All services on Docker default bridge network. Inter-service communication uses container names:
-- Radarr → Deluge: `deluge:8112`
+**VPN Isolation:**
+- Gluetun creates isolated network namespace
+- Deluge uses `network_mode: "service:gluetun"` (shares gluetun's network)
+- Deluge traffic ONLY goes through VPN tunnel
+- If VPN disconnects, Deluge loses all network access (kill switch)
+
+**Reverse Proxy (Traefik):**
+- Dedicated `proxy` bridge network for Traefik-managed services
+- Automatic HTTPS via Let's Encrypt (HTTP-01 challenge)
+- Routes based on domain rules (Host headers)
+- HTTP → HTTPS redirect on all services
+- Services on proxy network: Traefik, Plex, Overseerr
+
+**Inter-Service Communication:**
+- Radarr → Deluge: `gluetun:8112` (Deluge accessible via gluetun's network)
 - Prowlarr → Radarr: `radarr:7878`
 - Overseerr → Plex: `plex:32400`
 - Overseerr → Radarr: `radarr:7878`
+- External → Services: via Traefik (domain-based routing)
+
+**Port Exposure:**
+- Traefik: 80 (HTTP), 443 (HTTPS) - publicly accessible
+- Gluetun exposes Deluge's ports (8112, 6881, 58846)
+- Deluge Web UI restricted to localhost (127.0.0.1:8112)
+- Only torrent port (6881) accessible from network
 
 ## Development Commands
 
@@ -79,12 +106,22 @@ docker compose down
 
 ```bash
 # Test connectivity between services
-docker exec radarr nc -zv deluge 8112
+docker exec radarr nc -zv gluetun 8112  # Note: deluge is via gluetun
 docker exec prowlarr nc -zv radarr 7878
 
 # Access service shells
 docker exec -it radarr /bin/bash
 docker exec -it deluge /bin/bash
+docker exec -it gluetun sh
+
+# Check VPN status and public IP
+docker compose logs gluetun --tail=20
+docker exec gluetun wget -qO- ifconfig.me
+docker exec gluetun wget -qO- http://ipinfo.io/country
+
+# Check Traefik status and certificate generation
+docker compose logs traefik --tail=50
+docker compose logs traefik | grep -i "certificate"
 ```
 
 ## Configuration Management
@@ -114,11 +151,29 @@ docker exec -it deluge /bin/bash
 - Seed ratios and time limits
 - Port configuration
 - Plugin settings (Labels plugin required for categorization)
+- **Security settings** (CRITICAL for private trackers):
+  - DHT disabled (`"dht": false`) - Required for TorrentDay
+  - LSD disabled (`"lsd": false`) - Required for TorrentDay
+  - PEX disabled (`"utpex": false`) - Required for TorrentDay
+  - UPnP/NAT-PMP disabled - Security hardening
+  - Anonymous mode enabled - Privacy
 
 **Prowlarr** (`configs/prowlarr/config.xml`):
 - Indexer definitions
 - App sync configuration (Radarr connection)
 - Category mappings
+
+**Traefik** (`configs/traefik/letsencrypt/acme.json`):
+- Let's Encrypt SSL certificates
+- Automatically generated and renewed
+- File must have 600 permissions
+- Contains private keys - DO NOT commit to version control
+
+**Traefik Configuration** (docker-compose.yml labels):
+- Routing rules: Domain-based routing via Host() matcher
+- TLS: Automatic cert resolver via Let's Encrypt
+- Entrypoints: web (80) and websecure (443)
+- Middleware: Basic auth for dashboard
 
 ## TRaSH Guides Compliance
 
@@ -137,9 +192,15 @@ This setup follows TRaSH Guides best practices:
 
 ## Common Issues
 
+### Radarr Can't Connect to Deluge
+- Verify gluetun is running: `docker compose ps gluetun`
+- Check VPN connection: `docker compose logs gluetun --tail=20`
+- Radarr must connect to `gluetun:8112` (not `deluge:8112`)
+- Test connectivity: `docker exec radarr nc -zv gluetun 8112`
+
 ### Radarr Can't Set Categories in Deluge
 - Verify Labels plugin enabled in `configs/deluge/core.conf`
-- Restart Deluge: `docker compose restart deluge`
+- Restart both containers: `docker compose restart gluetun deluge`
 - Test in Radarr: Settings → Download Clients → Test
 
 ### Downloads Not Importing
@@ -159,14 +220,71 @@ This setup follows TRaSH Guides best practices:
 - Check Overseerr scheduled job (Plex scan every 5 min)
 - Manual scan: Plex UI → Library → Scan Library Files
 
+### Traefik Certificate Issues
+- Check Traefik logs: `docker compose logs traefik | grep -i "acme\|certificate"`
+- Verify DNS records pointing to correct IP: `nslookup plex.${DOMAIN}`
+- Verify ports 80/443 forwarded to Docker host
+- Check Let's Encrypt rate limits (5 certs/week per domain)
+- Verify domain is publicly accessible: `curl -I http://${DOMAIN}`
+- Delete `configs/traefik/letsencrypt/acme.json` to retry cert generation
+
+### Traefik Not Routing to Service
+- Verify service is on `proxy` network in docker-compose.yml
+- Check Traefik labels on service (traefik.enable=true, routers, etc.)
+- Verify service is running: `docker compose ps`
+- Check Traefik dashboard for registered routers and services
+- Test internal connectivity: `docker exec traefik wget -O- http://plex:32400`
+
 ## Access URLs
 
-All services accessible at `dev.local`:
+**Internal Access** (local network):
 - Plex: http://dev.local:32400
 - Radarr: http://dev.local:7878
 - Prowlarr: http://dev.local:9696
 - Overseerr: http://dev.local:5055
 - Deluge: http://dev.local:8112
+
+**External Access** (via Traefik, requires DNS + port forwarding):
+- Plex: https://plex.${DOMAIN}
+- Overseerr: https://requests.${DOMAIN}
+- Traefik Dashboard: https://traefik.${DOMAIN} (basic auth required)
+
+## Security & Privacy
+
+### Private Tracker Configuration
+**CRITICAL:** TorrentDay (and other private trackers) will ban you if these are enabled:
+- ❌ DHT (Distributed Hash Table)
+- ❌ LSD (Local Service Discovery)
+- ❌ PEX (Peer Exchange)
+
+**Current Status:** ✅ All disabled in `configs/deluge/core.conf`
+
+### Network Exposure
+**Web UI Access:**
+- Deluge: `127.0.0.1:8112` (localhost only)
+- Other services: `0.0.0.0:port` (network accessible)
+
+**Torrent Ports:**
+- 6881 (TCP/UDP) exposed for incoming connections
+
+### VPN Status
+**✅ CONFIGURED:** Gluetun VPN container with NordVPN
+- All Deluge traffic routes through VPN tunnel
+- Kill switch enabled (network_mode prevents IP leaks)
+- VPN credentials in `.env` (NORDVPN_USER, NORDVPN_PASSWORD)
+- Server location: Configurable via NORDVPN_COUNTRY
+
+**Checking VPN Connection:**
+```bash
+# View gluetun logs to see VPN status
+docker compose logs gluetun --tail=50
+
+# Check Deluge's public IP (should be VPN IP)
+docker exec gluetun wget -qO- ifconfig.me
+
+# Restart VPN connection
+docker compose restart gluetun
+```
 
 ## Important Notes
 
@@ -174,6 +292,7 @@ All services accessible at `dev.local`:
 - Deluge default username: `admin` (password set in `.env`)
 - First-time setup requires accessing each service to complete initial configuration
 - API keys auto-generate on first run and persist in `configs/` directory
+- **Private tracker compliance:** DHT/LSD/PEX must stay disabled
 
 ### Required UI Configuration After Volume Changes
 

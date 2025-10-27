@@ -1,4 +1,65 @@
 services:
+  # Reverse proxy - handles HTTPS and routing for public services
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    command:
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./configs/traefik/letsencrypt:/letsencrypt
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dashboard.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+    restart: unless-stopped
+    networks:
+      - proxy
+
+  # VPN container - routes Deluge traffic through NordVPN
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - 127.0.0.1:8112:8112  # Deluge Web UI
+      - 6881:6881  # Deluge incoming torrent connections
+      - 6881:6881/udp
+      - 127.0.0.1:58846:58846  # Deluge daemon
+    volumes:
+      - ./configs/gluetun:/gluetun
+    environment:
+      - VPN_SERVICE_PROVIDER=nordvpn
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=${NORDVPN_USER}
+      - OPENVPN_PASSWORD=${NORDVPN_PASSWORD}
+      - SERVER_COUNTRIES=${NORDVPN_COUNTRY:-United States}
+      - TZ=${TZ:-America/Chicago}
+      - FIREWALL_OUTBOUND_SUBNETS=172.18.0.0/16  # Allow Docker network
+      - HTTPPROXY=off
+      - SHADOWSOCKS=off
+    restart: unless-stopped
+
   plex:
     image: plexinc/pms-docker
     container_name: plex
@@ -19,6 +80,14 @@ services:
       - ./configs/plex:/config
       - /tmp/plex:/transcode
       - /Volumes/Samsung_T5:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.plex.rule=Host(`plex.${DOMAIN}`)"
+      - "traefik.http.routers.plex.entrypoints=websecure"
+      - "traefik.http.routers.plex.tls.certresolver=letsencrypt"
+      - "traefik.http.services.plex.loadbalancer.server.port=32400"
+    networks:
+      - proxy
     restart: unless-stopped
 
   radarr:
@@ -46,10 +115,19 @@ services:
       - 5055:5055
     volumes:
       - ./configs/overseerr:/app/config
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.overseerr.rule=Host(`requests.${DOMAIN}`)"
+      - "traefik.http.routers.overseerr.entrypoints=websecure"
+      - "traefik.http.routers.overseerr.tls.certresolver=letsencrypt"
+      - "traefik.http.services.overseerr.loadbalancer.server.port=5055"
+    networks:
+      - proxy
     restart: unless-stopped
   deluge:
     image: lscr.io/linuxserver/deluge:latest
     container_name: deluge
+    network_mode: "service:gluetun"  # Route all traffic through VPN
     environment:
       - PUID=1000
       - PGID=1000
@@ -58,11 +136,8 @@ services:
     volumes:
       - ./configs/deluge:/config
       - /Volumes/Samsung_T5:/data
-    ports:
-      - 8112:8112
-      - 6881:6881
-      - 6881:6881/udp
-      - 58846:58846 #optional
+    depends_on:
+      - gluetun
     restart: unless-stopped
 
   prowlarr:
@@ -77,3 +152,8 @@ services:
     ports:
       - 9696:9696
     restart: unless-stopped
+
+networks:
+  proxy:
+    name: proxy
+    driver: bridge

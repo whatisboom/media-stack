@@ -6,11 +6,13 @@ Self-hosted media automation stack built with Docker, configured following [TRaS
 
 | Service | Port | Purpose | Access URL |
 |---------|------|---------|------------|
-| **Plex** | 32400 | Media streaming server | http://dev.local:32400 |
+| **Traefik** | 80, 443 | Reverse proxy with automatic HTTPS | https://traefik.${DOMAIN} |
+| **Gluetun** | - | VPN container (NordVPN) | - |
+| **Plex** | 32400 | Media streaming server | https://plex.${DOMAIN} (external)<br>http://dev.local:32400 (internal) |
 | **Radarr** | 7878 | Movie library management & automation | http://dev.local:7878 |
 | **Prowlarr** | 9696 | Indexer management (centralized) | http://dev.local:9696 |
-| **Overseerr** | 5055 | Media request management | http://dev.local:5055 |
-| **Deluge** | 8112 | BitTorrent client | http://dev.local:8112 |
+| **Overseerr** | 5055 | Media request management | https://requests.${DOMAIN} (external)<br>http://dev.local:5055 (internal) |
+| **Deluge** | 8112 | BitTorrent client (via gluetun) | http://dev.local:8112 |
 
 ## Quick Start
 
@@ -24,7 +26,14 @@ Self-hosted media automation stack built with Docker, configured following [TRaS
 2. **Edit `.env` and configure**:
    - Set `PLEX_CLAIM_TOKEN` - Get from https://www.plex.tv/claim/ (expires in 4 minutes)
    - Set `DELUGE_WEB_PASSWORD` - Your preferred password
+   - Set `DOMAIN` - Your domain name (e.g., example.com)
+   - Set `ACME_EMAIL` - Your email for Let's Encrypt notifications
+   - Set `TRAEFIK_BASIC_AUTH` - Generate with: `htpasswd -nb admin your-password`
+   - Set `NORDVPN_USER` and `NORDVPN_PASSWORD` - Get service credentials from https://my.nordaccount.com/dashboard/nordvpn/
+     - **IMPORTANT**: Use "Service credentials" NOT your regular NordVPN account login
+     - Go to "Set up NordVPN manually" → "Service credentials"
    - Adjust `TZ` if needed (default: America/Chicago)
+   - Optional: Set `NORDVPN_COUNTRY` for preferred VPN server location
 
 3. **Start services**:
    ```bash
@@ -189,32 +198,123 @@ This setup follows [TRaSH Guides](https://trash-guides.info/) recommendations:
 All services mount `/Volumes/Samsung_T5` as `/data`, ensuring `/data/Downloads` and `/data/Movies` are on the same filesystem. This enables hardlinks for instant moves and space-efficient operations (file exists in both locations but only uses space once).
 
 ### Private Trackers
-If using private trackers, disable DHT, LSD, and UPnP in Deluge:
-```
-configs/deluge/core.conf:
-- "dht": false
-- "lsd": false
-- "upnp": false
-```
+**CRITICAL:** Private trackers (like TorrentDay) require specific settings to avoid bans:
+
+**Already Configured:**
+- ✅ DHT disabled (`"dht": false`) - REQUIRED for private trackers
+- ✅ LSD disabled (`"lsd": false`) - REQUIRED for private trackers
+- ✅ PEX disabled (`"utpex": false`) - REQUIRED for private trackers
+- ✅ UPnP disabled (`"upnp": false`) - Security best practice
+- ✅ NAT-PMP disabled (`"natpmp": false`) - Security best practice
+- ✅ Anonymous mode enabled - Reduces client info leakage
+
+**Network Security:**
+- Web UI bound to localhost only (127.0.0.1:8112)
+- Daemon port bound to localhost only (127.0.0.1:58846)
+- Only torrent ports (6881) exposed to network
 
 ## Security
 
 ### Current Setup
-✅ **Implemented**:
+
+**✅ Implemented - Private Tracker Compliance:**
+- DHT, LSD, PEX disabled (required for private trackers)
+- UPnP, NAT-PMP disabled (prevents automatic port exposure)
+- Anonymous mode enabled (reduces fingerprinting)
+- Web UI restricted to localhost (127.0.0.1:8112)
+
+**✅ Implemented - Data Security:**
 - Secrets stored in `.env` file (not in version control)
 - `.gitignore` prevents committing sensitive data
 - Configs directory excluded from git (contains auto-generated API keys)
 
-⚠️ **Still Needed for Production**:
-- No HTTPS configured
+**✅ Implemented - VPN Protection:**
+- All Deluge traffic routed through gluetun VPN container
+- Using NordVPN via OpenVPN
+- Automatic kill switch (if VPN disconnects, torrent traffic stops)
+- No IP leaks possible (Deluge shares gluetun's network stack)
+
+**⚠️ Still Needed for Production:**
+- No HTTPS configured (reverse proxy recommended)
 - Some services lack authentication
-- No VPN for torrent traffic
+- No network isolation between services
+
+### VPN Architecture
+
+**Gluetun Container**
+- Uses qmcgaw/gluetun image
+- Connects to NordVPN via OpenVPN
+- Creates isolated network namespace for VPN tunnel
+- Exposes Deluge ports through VPN connection
+
+**Deluge Network Routing**
+- Uses `network_mode: "service:gluetun"`
+- Shares gluetun's network stack (shares VPN tunnel)
+- ALL traffic (torrent + web UI) goes through VPN
+- If VPN fails, Deluge has no network access (kill switch)
+
+**Port Mapping**
+- Ports configured on gluetun (not Deluge)
+- Web UI: 127.0.0.1:8112 (localhost only)
+- Torrent: 6881 (TCP/UDP, for peer connections)
+- Daemon: 127.0.0.1:58846 (localhost only)
+
+**Changing VPN Server**
+Edit `.env`:
+```bash
+NORDVPN_COUNTRY=United Kingdom  # or Canada, Netherlands, etc.
+```
+Then: `docker compose up -d gluetun`
+
+### Traefik Reverse Proxy
+
+**Overview**
+- Automatic HTTPS via Let's Encrypt
+- Routes traffic to services based on domain
+- HTTP to HTTPS redirect
+- Dashboard protected with basic auth
+
+**Services Exposed**
+- `plex.${DOMAIN}` → Plex Media Server
+- `requests.${DOMAIN}` → Overseerr
+- `traefik.${DOMAIN}` → Traefik Dashboard (optional)
+
+**DNS Configuration Required**
+Create A records pointing to your public IP:
+```
+plex.example.com     → your-public-ip
+requests.example.com → your-public-ip
+traefik.example.com  → your-public-ip
+```
+
+**Port Forwarding Required**
+Configure your router to forward:
+- Port 80 (HTTP) → Docker host
+- Port 443 (HTTPS) → Docker host
+
+**Certificate Storage**
+Let's Encrypt certificates stored in: `./configs/traefik/letsencrypt/acme.json`
+
+**First-Time Setup**
+1. Configure DNS records
+2. Set up port forwarding
+3. Update `.env` with domain and email
+4. Generate basic auth: `htpasswd -nb admin yourpassword`
+5. Start Traefik: `docker compose up -d traefik`
+6. Check logs: `docker compose logs -f traefik`
+7. Verify certificates: Look for "Certificate obtained for domain" messages
+
+**Troubleshooting**
+- Ensure ports 80/443 are accessible from internet
+- Verify DNS propagation: `nslookup plex.yourdomain.com`
+- Check Traefik logs for ACME errors
+- Let's Encrypt has rate limits (5 certs/week per domain)
 
 ### Recommendations for Production
-1. **Reverse Proxy**: Use Nginx/Traefik with HTTPS and Let's Encrypt
-2. **Authentication**: Enable on all services (especially Prowlarr/Radarr)
-3. **VPN**: Route Deluge through VPN container for privacy
-4. **Network Isolation**: Use Docker networks to limit service access
+1. ✅ **VPN**: Implemented with gluetun + NordVPN
+2. ✅ **Reverse Proxy**: Implemented with Traefik and Let's Encrypt (requires DNS/port forwarding setup)
+3. **Authentication**: Enable on all services (especially Prowlarr/Radarr)
+4. ✅ **Network Isolation**: Proxy network configured for Traefik-managed services
 5. **Regular Updates**: Keep all containers up to date
 
 ### Secret Management
@@ -280,8 +380,10 @@ If Radarr can't set categories in Deluge:
 - [ ] Configure custom formats in Radarr (optional)
 - [ ] Set up Sonarr for TV shows (optional)
 - [ ] Configure notifications (Discord, Email, etc.)
-- [ ] Add VPN container for secure torrenting
-- [ ] Set up reverse proxy with HTTPS
+- [x] Add VPN container for secure torrenting
+- [x] Set up reverse proxy with HTTPS
+- [ ] Configure DNS records for Traefik domains
+- [ ] Set up router port forwarding (80, 443)
 
 ## Resources
 

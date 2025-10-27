@@ -1,7 +1,7 @@
 # Environment variables (contains secrets)
 .env
 
-# Application configs (contains auto-generated API keys and databases)
+# Application configs (contains auto-generated API keys, databases, and VPN configs)
 configs/
 
 # Claude Code user-specific settings
