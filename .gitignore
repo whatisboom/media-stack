@@ -1,0 +1,22 @@
+# Environment variables (contains secrets)
+.env
+
+# Application configs (contains auto-generated API keys and databases)
+configs/
+
+# Claude Code user-specific settings
+.claude/
+
+# macOS
+.DS_Store
+
+# Docker
+.docker/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~

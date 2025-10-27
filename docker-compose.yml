@@ -1,0 +1,79 @@
+services:
+  plex:
+    image: plexinc/pms-docker
+    container_name: plex
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - PLEX_CLAIM=${PLEX_CLAIM_TOKEN}
+    ports:
+      - 32400:32400/tcp
+      - 1900:1900/udp
+      - 3005:3005/tcp
+      - 8324:8324/tcp
+      - 32410:32410/udp
+      - 32412:32412/udp
+      - 32413:32413/udp
+      - 32414:32414/udp
+      - 32469:32469/tcp
+    volumes:
+      - ./configs/plex:/config
+      - /tmp/plex:/transcode
+      - /Volumes/Samsung_T5/Movies:/data
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ./configs/radarr:/config
+      - /Volumes/Samsung_T5/Movies:/movies
+    ports:
+      - 7878:7878
+    restart: unless-stopped
+
+  overseerr:
+    image: sctx/overseerr:latest
+    container_name: overseerr
+    environment:
+      - LOG_LEVEL=debug
+      - TZ=${TZ:-America/Chicago}
+      - PORT=5055
+    ports:
+      - 5055:5055
+    volumes:
+      - ./configs/overseerr:/app/config
+    restart: unless-stopped
+  deluge:
+    image: lscr.io/linuxserver/deluge:latest
+    container_name: deluge
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-America/Chicago}
+      - DELUGE_LOGLEVEL=error #optional
+    volumes:
+      - ./configs/deluge:/config
+      - /Volumes/Samsung_T5/Downloads:/downloads
+    ports:
+      - 8112:8112
+      - 6881:6881
+      - 6881:6881/udp
+      - 58846:58846 #optional
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ./configs/prowlarr:/config
+    ports:
+      - 9696:9696
+    restart: unless-stopped
