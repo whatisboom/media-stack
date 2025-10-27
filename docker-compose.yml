@@ -279,14 +279,17 @@ services:
   backup:
     build: ./backup
     container_name: backup
-    profiles:
-      - tools
     volumes:
       - .:/workspace
       - ./backup/rclone.conf:/root/.config/rclone/rclone.conf:ro
+      - ./logs:/logs
     environment:
       - REMOTE_BACKUP_PATH=${REMOTE_BACKUP_PATH}
+      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 3 * * 1}
+      - TZ=${TZ:-America/Chicago}
+      - RUN_ON_STARTUP=false
     working_dir: /workspace
+    restart: unless-stopped
 
   recyclarr:
     build: ./recyclarr

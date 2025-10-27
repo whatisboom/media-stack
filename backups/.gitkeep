@@ -1,0 +1,2 @@
+# This file preserves the backups directory structure in git
+# Actual backup files are gitignored

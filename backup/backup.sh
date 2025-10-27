@@ -3,7 +3,7 @@
 # Media Stack Backup Script
 # Creates compressed backups of critical configuration files for disaster recovery
 #
-# Usage: ./scripts/backup.sh [--remote-sync]
+# Usage: ./backup/backup.sh [--remote-sync]
 #
 
 set -euo pipefail

@@ -667,13 +667,14 @@ The stack includes automated backup scripts for catastrophic recovery scenarios.
 
 **Manual backup:**
 ```bash
-./scripts/backup.sh
+./backup/backup.sh
 ```
 
-**Monthly automated backup (via cron):**
+**Automated backup (via container):**
+The backup container runs automatically based on schedule configured in `.env`:
 ```bash
-# Add to crontab
-0 3 1 * * cd /Users/brandon/projects/torrents && ./scripts/backup.sh
+# Default: Weekly on Monday at 3 AM
+BACKUP_SCHEDULE=0 3 * * 1
 ```
 
 **With remote sync:**
@@ -683,8 +684,8 @@ REMOTE_BACKUP_PATH="s3://my-bucket/backups"      # AWS S3
 REMOTE_BACKUP_PATH="user@server:/backups"        # SSH/rsync
 REMOTE_BACKUP_PATH="/Volumes/External/backups"   # Local path
 
-# Run with sync
-./scripts/backup.sh --remote-sync
+# Run manual backup with sync
+./backup/backup.sh --remote-sync
 ```
 
 **Backup location:** `./backups/media-stack-backup_YYYYMMDD_HHMMSS.tar.gz`

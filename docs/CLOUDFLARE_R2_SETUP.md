@@ -187,7 +187,7 @@ REMOTE_BACKUP_PATH="r2:media-stack-backups"
 Run a backup with remote sync enabled:
 ```bash
 cd /Users/brandon/projects/torrents
-./scripts/backup.sh --remote-sync
+./backup/backup.sh --remote-sync
 ```
 
 Expected output:
@@ -225,9 +225,13 @@ Add to crontab for monthly backups with cloud sync:
 crontab -e
 ```
 
-Add this line:
-```
-0 3 1 * * cd /Users/brandon/projects/torrents && ./scripts/backup.sh --remote-sync >> logs/backup.log 2>&1
+**Note:** The backup container now handles automated backups via its built-in cron.
+Configure `BACKUP_SCHEDULE=0 3 * * 1` in `.env` instead of using host cron.
+
+For reference, the old manual cron approach was:
+```bash
+# No longer needed - backup container handles this automatically
+# 0 3 1 * * cd /Users/brandon/projects/torrents && ./backup/backup.sh --remote-sync >> logs/backup.log 2>&1
 ```
 
 This runs on the 1st of each month at 3:00 AM.

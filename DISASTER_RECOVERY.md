@@ -17,13 +17,14 @@ This guide covers catastrophic failure scenarios and how to recover your media s
 
 **Purpose:** Catastrophic recovery only (not versioned configuration management)
 
-**Frequency:** On-demand or monthly
+**Frequency:** Automated weekly (Monday 3 AM) or on-demand
 ```bash
 # Manual backup
-./scripts/backup.sh
+./backup/backup.sh
 
-# Monthly backup (via cron)
-# Add to crontab: 0 3 1 * * cd /Users/brandon/projects/torrents && ./scripts/backup.sh
+# Automated backups
+# Configured in .env: BACKUP_SCHEDULE=0 3 * * 1 (Weekly Monday 3 AM)
+# Runs automatically via backup container (no host cron needed)
 ```
 
 **Backup Contents:**
@@ -49,8 +50,10 @@ REMOTE_BACKUP_PATH="s3://my-bucket/media-stack"          # AWS S3
 REMOTE_BACKUP_PATH="user@backup-server:/backups"        # SSH/rsync
 REMOTE_BACKUP_PATH="/Volumes/ExternalDrive/backups"     # Local path
 
-# Run with remote sync
-./scripts/backup.sh --remote-sync
+# Manual backup with remote sync
+./backup/backup.sh --remote-sync
+
+# Automated backups always sync if REMOTE_BACKUP_PATH is configured
 ```
 
 ---
@@ -399,9 +402,12 @@ After recovery, verify each component:
    tar tzf backups/media-stack-backup_YYYYMMDD_HHMMSS.tar.gz | head -20
    ```
 
-2. **Store backups off-site:** Use `--remote-sync` to backup to cloud/another machine
+2. **Store backups off-site:** Configure REMOTE_BACKUP_PATH in .env for automatic sync
    ```bash
-   ./scripts/backup.sh --remote-sync
+   # Manual backup with remote sync
+   ./backup/backup.sh --remote-sync
+
+   # Or set REMOTE_BACKUP_PATH in .env for automatic weekly sync
    ```
 
 3. **Document credentials:** Keep VPN and service credentials in password manager
@@ -437,8 +443,8 @@ After recovery, verify each component:
 ## Quick Reference Commands
 
 ```bash
-# Create backup
-./scripts/backup.sh
+# Create manual backup
+./backup/backup.sh
 
 # List backups
 ls -lh backups/

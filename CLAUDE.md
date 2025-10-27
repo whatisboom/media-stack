@@ -81,31 +81,66 @@ Overseerr (Requests)
 
 ### Network Architecture
 
-**VPN Isolation:**
+**Network Segmentation (Least-Privilege Isolation):**
+The stack uses isolated Docker networks to limit lateral movement and enforce security boundaries:
+
+1. **proxy** - Public-facing services
+   - Traefik (reverse proxy)
+   - Plex (media streaming)
+   - Overseerr (request management)
+
+2. **media** - Media consumption
+   - Plex (media server)
+   - Tautulli (monitoring)
+
+3. **automation** - Media management (*arr stack)
+   - Radarr (movies)
+   - Sonarr (TV shows)
+   - Bazarr (subtitles)
+   - Prowlarr (indexers)
+   - Overseerr (connects automation → media)
+
+4. **download** - Torrenting (isolated)
+   - Gluetun (VPN tunnel)
+   - Deluge (torrent client via gluetun)
+
+5. **monitoring** - Health checks (read-only)
+   - health-monitor (connects to all networks for status checks)
+   - Watchtower (update monitoring)
+
+**VPN Isolation (Critical Security Layer):**
 - Gluetun creates isolated network namespace
 - Deluge uses `network_mode: "service:gluetun"` (shares gluetun's network)
 - Deluge traffic ONLY goes through VPN tunnel
 - If VPN disconnects, Deluge loses all network access (kill switch)
+
+**Fail2ban Protection:**
+- Operates at host network level (`network_mode: host`)
+- Monitors service logs for auth failures
+- Automatically bans IPs via iptables
+- Protects: Radarr, Sonarr, Prowlarr, Overseerr, Plex
 
 **Reverse Proxy (Traefik):**
 - Dedicated `proxy` bridge network for Traefik-managed services
 - Automatic HTTPS via Let's Encrypt (HTTP-01 challenge)
 - Routes based on domain rules (Host headers)
 - HTTP → HTTPS redirect on all services
-- Services on proxy network: Traefik, Plex, Overseerr
 
 **Inter-Service Communication:**
-- Radarr → Deluge: `gluetun:8112` (Deluge accessible via gluetun's network)
-- Sonarr → Deluge: `gluetun:8112` (Deluge accessible via gluetun's network)
-- Bazarr → Radarr: `radarr:7878`
-- Bazarr → Sonarr: `sonarr:8989`
-- Prowlarr → Radarr: `radarr:7878`
-- Prowlarr → Sonarr: `sonarr:8989`
-- Overseerr → Plex: `plex:32400`
-- Overseerr → Radarr: `radarr:7878`
-- Overseerr → Sonarr: `sonarr:8989`
-- Tautulli → Plex: `plex:32400`
-- External → Services: via Traefik (domain-based routing)
+Services can only communicate with others on their shared networks:
+- Radarr/Sonarr → Deluge: `gluetun:8112` (automation + download networks)
+- Radarr/Sonarr ← Prowlarr: `radarr:7878`, `sonarr:8989` (automation network)
+- Radarr/Sonarr → Bazarr: `radarr:7878`, `sonarr:8989` (automation network)
+- Overseerr → Plex: `plex:32400` (media network)
+- Overseerr → Radarr/Sonarr: `radarr:7878`, `sonarr:8989` (automation network)
+- Tautulli → Plex: `plex:32400` (media network)
+- External → Services: via Traefik (proxy network, domain-based routing)
+
+**Network Isolation Benefits:**
+- ✅ Radarr cannot directly access Plex
+- ✅ Deluge isolated in download network (VPN-only)
+- ✅ Fail2ban protects all exposed services
+- ✅ Lateral movement limited by network boundaries
 
 **Port Exposure:**
 - Traefik: 80 (HTTP), 443 (HTTPS) - publicly accessible
@@ -361,6 +396,62 @@ This setup follows TRaSH Guides best practices:
 - Plex: https://plex.${DOMAIN}
 - Overseerr: https://requests.${DOMAIN}
 - Traefik Dashboard: https://traefik.${DOMAIN} (basic auth required)
+
+## Backup & Disaster Recovery
+
+### Automated Backup System
+
+**Container-Based Scheduling:**
+- Backup service runs continuously with built-in cron (dcron)
+- No host dependencies required (fully portable)
+- Schedule configured via `.env`: `BACKUP_SCHEDULE=0 3 * * 1` (Weekly Monday 3 AM)
+- Automatic retention: Keeps last 12 backups (~150MB total)
+
+**What's Backed Up:**
+- Service configurations and databases (`configs/`)
+- Environment variables (`.env`)
+- Infrastructure definition (`docker-compose.yml`)
+- Monitoring scripts (`monitoring/`)
+- Documentation files
+
+**What's NOT Backed Up:**
+- Media files (626GB) - Re-downloadable via Radarr/Sonarr
+- Plex watch history - Lost in drive failure
+- Plex logs and cache
+
+**Manual Backup:**
+```bash
+# Run backup manually
+./backup/backup.sh
+
+# With remote sync
+./backup/backup.sh --remote-sync
+
+# Or via container
+docker compose exec backup /usr/local/bin/backup.sh
+```
+
+**Remote Sync:**
+Configure in `.env` to automatically sync backups to cloud storage:
+```bash
+# Cloudflare R2 (recommended - 10GB free, zero egress fees)
+REMOTE_BACKUP_PATH=r2:media-stack-backups
+
+# AWS S3
+REMOTE_BACKUP_PATH=s3://my-bucket/backups
+
+# SSH/rsync
+REMOTE_BACKUP_PATH=user@server:/backups
+
+# Local path
+REMOTE_BACKUP_PATH=/Volumes/External/backups
+```
+
+**Disaster Recovery:**
+- See `DISASTER_RECOVERY.md` for detailed recovery procedures
+- Two scenarios covered: Drive re-mount (5 min) and complete drive failure (hours-days)
+- Service configs fully recoverable from backup
+- Media requires re-downloading (automated via Radarr/Sonarr)
 
 ## Security & Privacy
 
