@@ -299,6 +299,42 @@ services:
       - automation
       - media
     restart: unless-stopped
+
+  homarr:
+    image: ghcr.io/ajnart/homarr:latest
+    container_name: homarr
+    environment:
+      - TZ=${TZ:-America/Chicago}
+    ports:
+      - 7575:7575
+    volumes:
+      - ./configs/homarr/configs:/app/data/configs
+      - ./configs/homarr/icons:/app/public/icons
+      - ./configs/homarr/data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.homarr.rule=Host(`home.${DOMAIN}`)"
+      - "traefik.http.routers.homarr.entrypoints=websecure"
+      - "traefik.http.routers.homarr.tls.certresolver=letsencrypt"
+      - "traefik.http.services.homarr.loadbalancer.server.port=7575"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7575"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - proxy
+    restart: unless-stopped
+
   deluge:
     image: lscr.io/linuxserver/deluge:latest
     container_name: deluge

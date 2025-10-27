@@ -187,7 +187,7 @@ EOF
 check_docker_health() {
     log "INFO" "Checking Docker service health..."
 
-    local services=(traefik gluetun plex radarr sonarr prowlarr overseerr deluge fail2ban)
+    local services=(traefik gluetun plex radarr sonarr prowlarr overseerr homarr deluge fail2ban)
     local failed_services=()
     local recovered_services=()
 
