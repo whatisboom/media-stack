@@ -446,6 +446,31 @@ services:
       - monitoring
     restart: unless-stopped
 
+  fail2ban:
+    image: lscr.io/linuxserver/fail2ban:latest
+    container_name: fail2ban
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    network_mode: host
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ./configs/fail2ban:/config
+      - ./logs:/remotelogs:ro
+      - /var/log:/var/log:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    restart: unless-stopped
+
 networks:
   proxy:
     name: proxy

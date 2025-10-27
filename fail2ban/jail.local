@@ -1,0 +1,49 @@
+# Fail2ban jails for media automation stack
+# These jails monitor authentication failures and repeated access attempts
+
+[DEFAULT]
+# Ban IPs for 1 hour after 5 failures within 10 minutes
+bantime = 3600
+findtime = 600
+maxretry = 5
+# Use iptables for bans
+banaction = iptables-multiport
+# Email notifications disabled (using Discord via health-monitor)
+destemail = root@localhost
+sendername = Fail2Ban
+action = %(action_)s
+
+[radarr]
+enabled = true
+filter = radarr
+logpath = /remotelogs/radarr.log
+port = 7878
+maxretry = 5
+
+[sonarr]
+enabled = true
+filter = sonarr
+logpath = /remotelogs/sonarr.log
+port = 8989
+maxretry = 5
+
+[prowlarr]
+enabled = true
+filter = prowlarr
+logpath = /remotelogs/prowlarr.log
+port = 9696
+maxretry = 5
+
+[overseerr]
+enabled = true
+filter = overseerr
+logpath = /remotelogs/overseerr.log
+port = 5055
+maxretry = 5
+
+[plex]
+enabled = true
+filter = plex
+logpath = /var/log/plex.log
+port = 32400
+maxretry = 5

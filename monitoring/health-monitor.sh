@@ -187,7 +187,7 @@ EOF
 check_docker_health() {
     log "INFO" "Checking Docker service health..."
 
-    local services=(traefik gluetun plex radarr sonarr prowlarr overseerr deluge)
+    local services=(traefik gluetun plex radarr sonarr prowlarr overseerr deluge fail2ban)
     local failed_services=()
     local recovered_services=()
 
@@ -347,6 +347,41 @@ check_disk_space() {
     return 0
 }
 
+# Check fail2ban status
+check_fail2ban() {
+    log "INFO" "Checking fail2ban status..."
+
+    # Check if fail2ban container is running
+    if ! docker inspect --format='{{.State.Running}}' fail2ban &>/dev/null; then
+        log "ERROR" "fail2ban container is not running"
+        return 1
+    fi
+
+    # Get ban statistics
+    local total_banned=0
+    local jail_status=""
+
+    # List all active jails and count banned IPs
+    local jails=(radarr sonarr prowlarr overseerr plex)
+    for jail in "${jails[@]}"; do
+        local banned_count=$(docker exec fail2ban fail2ban-client status "$jail" 2>/dev/null | grep "Currently banned:" | awk '{print $NF}' || echo "0")
+        if [ "$banned_count" != "0" ]; then
+            total_banned=$((total_banned + banned_count))
+            jail_status="${jail_status}\n- ${jail}: ${banned_count} banned IPs"
+            log "INFO" "fail2ban jail ${jail}: ${banned_count} banned IPs"
+        fi
+    done
+
+    # Log ban activity if any IPs are banned
+    if [ "$total_banned" -gt 0 ]; then
+        log "INFO" "fail2ban has banned $total_banned IPs across all jails"
+    else
+        log "INFO" "fail2ban is active with no banned IPs"
+    fi
+
+    return 0
+}
+
 # Main health check
 main() {
     log "INFO" "Starting health check..."
@@ -366,6 +401,10 @@ main() {
     fi
 
     if ! check_disk_space; then
+        check_failed=1
+    fi
+
+    if ! check_fail2ban; then
         check_failed=1
     fi
 
