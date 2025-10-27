@@ -11,6 +11,8 @@ Self-hosted media automation stack built with Docker, configured following [TRaS
 | **Plex** | 32400 | Media streaming server | https://plex.${DOMAIN} (external)<br>http://dev.local:32400 (internal) |
 | **Tautulli** | 8181 | Plex monitoring and analytics | http://dev.local:8181 |
 | **Radarr** | 7878 | Movie library management & automation | http://dev.local:7878 |
+| **Sonarr** | 8989 | TV show library management & automation | http://dev.local:8989 |
+| **Bazarr** | 6767 | Subtitle management for movies & TV | http://dev.local:6767 |
 | **Prowlarr** | 9696 | Indexer management (centralized) | http://dev.local:9696 |
 | **Overseerr** | 5055 | Media request management | https://requests.${DOMAIN} (external)<br>http://dev.local:5055 (internal) |
 | **Deluge** | 8112 | BitTorrent client (via gluetun) | http://dev.local:8112 |
@@ -61,13 +63,15 @@ docker compose up -d --force-recreate
 ```
 torrents/
 ├── configs/           # Persistent configuration for all services
+│   ├── bazarr/       # Bazarr subtitle settings and database
 │   ├── deluge/       # Deluge settings, auth, torrents
 │   ├── overseerr/    # Overseerr database and settings
 │   ├── plex/         # Plex Media Server data
 │   ├── prowlarr/     # Prowlarr indexer configs
 │   ├── radarr/       # Radarr database and settings
 │   ├── sonarr/       # Sonarr database and settings
-│   └── tautulli/     # Tautulli monitoring and statistics
+│   ├── tautulli/     # Tautulli monitoring and statistics
+│   └── traefik/      # Traefik SSL certificates
 ├── docker-compose.yml
 └── README.md
 ```
@@ -100,6 +104,15 @@ These are created automatically on first run. Find them in each service's web UI
 **Radarr** (http://dev.local:7878)
 - Location: Settings → General → Security → API Key
 - Also stored in: `configs/radarr/config.xml`
+
+**Sonarr** (http://dev.local:8989)
+- Location: Settings → General → Security → API Key
+- Also stored in: `configs/sonarr/config.xml`
+
+**Bazarr** (http://dev.local:6767)
+- Configuration: Auto-generated on first run
+- Radarr/Sonarr connection: Requires API keys from respective services
+- Also stored in: `configs/bazarr/config/config.ini`
 
 **Prowlarr** (http://dev.local:9696)
 - Location: Settings → General → Security → API Key
@@ -205,13 +218,16 @@ These are created automatically on first run. Find them in each service's web UI
 
 ## Workflow
 
-1. **Request** → User requests movie via Overseerr
-2. **Search** → Radarr searches configured indexers (via Prowlarr)
-3. **Download** → Radarr sends torrent to Deluge with category `radarr-movies`
-4. **Monitor** → Radarr monitors download progress in `/data/Downloads`
-5. **Import** → When complete, Radarr hardlinks/moves to `/data/Movies` with proper naming
-6. **Seed** → Deluge continues seeding until ratio/time goals met
-7. **Stream** → Plex makes movie available for streaming
+### Movie/TV Show Automation
+
+1. **Request** → User requests media via Overseerr
+2. **Search** → Radarr/Sonarr searches configured indexers (via Prowlarr)
+3. **Download** → Radarr/Sonarr sends torrent to Deluge with category (`radarr-movies` or `sonarr-tv`)
+4. **Monitor** → Radarr/Sonarr monitors download progress in `/data/Downloads`
+5. **Import** → When complete, Radarr/Sonarr hardlinks/moves to `/data/Movies` or `/data/Shows` with proper naming
+6. **Subtitles** → Bazarr detects new media and automatically downloads subtitles based on language preferences
+7. **Seed** → Deluge continues seeding until ratio/time goals met
+8. **Stream** → Plex makes media available for streaming with subtitles
 
 ## Deleting Movies and TV Shows
 
@@ -935,7 +951,9 @@ If Radarr can't set categories in Deluge:
 
 - [ ] Add indexers to Prowlarr
 - [ ] Configure custom formats in Radarr (optional)
-- [ ] Set up Sonarr for TV shows (optional)
+- [x] Set up Sonarr for TV shows
+- [x] Set up Bazarr for subtitle automation
+- [ ] Configure Bazarr subtitle providers and language preferences
 - [ ] Configure notifications (Discord, Email, etc.)
 - [ ] Set up Tautulli notifications for stream activity
 - [x] Add VPN container for secure torrenting
