@@ -171,6 +171,26 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ./configs/bazarr:/config
+      - /Volumes/Samsung_T5:/data
+    ports:
+      - 6767:6767
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6767"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
   overseerr:
     image: sctx/overseerr:latest
     container_name: overseerr
@@ -250,6 +270,7 @@ services:
       - plex
       - radarr
       - sonarr
+      - bazarr
       - prowlarr
       - overseerr
 

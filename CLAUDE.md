@@ -21,8 +21,12 @@ Self-hosted media automation stack using Docker Compose with VPN protection. Ser
 Overseerr (Requests)
     ↓
     ├─→ Radarr (Movie Management) ──┐
+    │           ↓                    │
+    │      Bazarr (Subtitles) ───────┤
     │                                │
     └─→ Sonarr (TV Management) ──────┤
+                ↓                    │
+           Bazarr (Subtitles) ───────┘
                                      ↓
                             Prowlarr (Indexer Management)
                                      ↓
@@ -48,6 +52,13 @@ Overseerr (Requests)
 4. Deluge downloads to `/data/Downloads`
 5. Sonarr hardlinks/moves from `/data/Downloads` to `/data/Shows` with proper naming
 6. Plex scans `/data/Shows` and makes available for streaming
+
+**Subtitle Download Flow:**
+1. Bazarr monitors Radarr and Sonarr for new media
+2. When new movie/episode is added, Bazarr searches configured subtitle providers
+3. Bazarr downloads subtitles based on language preferences and quality settings
+4. Subtitles saved alongside media files in `/data/Movies` or `/data/Shows`
+5. Plex automatically detects and uses subtitles
 
 ### Volume Architecture
 
@@ -86,6 +97,8 @@ Overseerr (Requests)
 **Inter-Service Communication:**
 - Radarr → Deluge: `gluetun:8112` (Deluge accessible via gluetun's network)
 - Sonarr → Deluge: `gluetun:8112` (Deluge accessible via gluetun's network)
+- Bazarr → Radarr: `radarr:7878`
+- Bazarr → Sonarr: `sonarr:8989`
 - Prowlarr → Radarr: `radarr:7878`
 - Prowlarr → Sonarr: `sonarr:8989`
 - Overseerr → Plex: `plex:32400`
@@ -127,6 +140,8 @@ docker compose down
 # Test connectivity between services
 docker exec radarr nc -zv gluetun 8112  # Note: deluge is via gluetun
 docker exec sonarr nc -zv gluetun 8112
+docker exec bazarr nc -zv radarr 7878
+docker exec bazarr nc -zv sonarr 8989
 docker exec prowlarr nc -zv radarr 7878
 docker exec prowlarr nc -zv sonarr 8989
 docker exec tautulli nc -zv plex 32400
@@ -134,6 +149,7 @@ docker exec tautulli nc -zv plex 32400
 # Access service shells
 docker exec -it radarr /bin/bash
 docker exec -it sonarr /bin/bash
+docker exec -it bazarr /bin/bash
 docker exec -it deluge /bin/bash
 docker exec -it tautulli /bin/bash
 docker exec -it gluetun sh
@@ -159,6 +175,7 @@ docker compose logs traefik | grep -i "certificate"
 **API Key Locations:**
 - Radarr: `configs/radarr/config.xml`
 - Sonarr: `configs/sonarr/config.xml`
+- Bazarr: `configs/bazarr/config/config.ini`
 - Prowlarr: `configs/prowlarr/config.xml`
 - Overseerr: `configs/overseerr/settings.json`
 - Tautulli: `configs/tautulli/config.ini`
@@ -178,6 +195,13 @@ docker compose logs traefik | grep -i "certificate"
 - Download client settings
 - Indexer connections (synced from Prowlarr)
 - Series type settings (Standard, Daily, Anime)
+
+**Bazarr** (`configs/bazarr/config/config.ini`):
+- Radarr and Sonarr connection settings
+- Subtitle language preferences
+- Subtitle provider configurations (OpenSubtitles, Subscene, etc.)
+- Subtitle search and download automation settings
+- Path mappings for media files
 
 **Deluge** (`configs/deluge/core.conf`):
 - Download path: `/data/Downloads`
@@ -303,6 +327,24 @@ This setup follows TRaSH Guides best practices:
 - Check activity feed refresh interval in Tautulli settings
 - Restart Tautulli: `docker compose restart tautulli`
 
+### Bazarr Can't Connect to Radarr/Sonarr
+- Verify Radarr/Sonarr are running: `docker compose ps radarr sonarr`
+- Test connectivity: `docker exec bazarr nc -zv radarr 7878` or `docker exec bazarr nc -zv sonarr 8989`
+- Use correct URLs in Bazarr settings:
+  - Radarr: `http://radarr:7878`
+  - Sonarr: `http://sonarr:8989`
+- Verify API keys are correct (copy from Radarr/Sonarr UI)
+- Check logs: `docker compose logs -f bazarr`
+
+### Bazarr Not Downloading Subtitles
+- Verify subtitle providers are configured and enabled
+- Check provider credentials (if required)
+- Verify language profiles are set correctly
+- Check path mappings in Bazarr match Radarr/Sonarr paths
+- Verify Bazarr has write permissions to media directories
+- Check minimum score threshold in subtitle settings
+- Review logs: `docker compose logs -f bazarr`
+
 ## Access URLs
 
 **Internal Access** (local network):
@@ -310,6 +352,7 @@ This setup follows TRaSH Guides best practices:
 - Tautulli: http://dev.local:8181
 - Radarr: http://dev.local:7878
 - Sonarr: http://dev.local:8989
+- Bazarr: http://dev.local:6767
 - Prowlarr: http://dev.local:9696
 - Overseerr: http://dev.local:5055
 - Deluge: http://dev.local:8112
@@ -417,3 +460,21 @@ After changing volume mounts, update paths in service UIs:
   - Sonarr Server: `http://sonarr:8989`
   - API Key: from Sonarr UI
   - Root folder: `/data/Shows`
+
+**Bazarr** (http://dev.local:6767):
+- Settings → Radarr
+  - Enabled: Yes
+  - Hostname or IP: `radarr`
+  - Port: `7878`
+  - API Key: from Radarr UI (Settings → General → Security)
+  - Path Mappings: Not required (unified `/data` mount)
+- Settings → Sonarr
+  - Enabled: Yes
+  - Hostname or IP: `sonarr`
+  - Port: `8989`
+  - API Key: from Sonarr UI (Settings → General → Security)
+  - Path Mappings: Not required (unified `/data` mount)
+- Settings → Languages
+  - Configure preferred subtitle languages
+- Settings → Providers
+  - Enable and configure subtitle providers (OpenSubtitles, Subscene, etc.)
