@@ -27,6 +27,11 @@ backups/
 # Backup rclone config (contains R2 credentials)
 backup/rclone.conf
 
+# Recyclarr cache and repositories (auto-generated)
+recyclarr/cache/
+recyclarr/repositories/
+recyclarr/settings.yml
+
 # Temporary files
 *.tmp
 *.swp

@@ -1,0 +1,179 @@
+# Recyclarr Configuration
+# Automatically syncs TRaSH Guide quality profiles and custom formats
+# Docs: https://recyclarr.dev/wiki/
+
+# Radarr Configuration
+radarr:
+  radarr-main:
+    base_url: http://radarr:7878
+    api_key: !env_var RADARR_API_KEY
+
+    # Delete custom formats not in TRaSH Guides
+    delete_old_custom_formats: true
+
+    # Replace existing custom formats with TRaSH versions
+    replace_existing_custom_formats: true
+
+    # Quality Definitions - Controls file size preferences
+    quality_definition:
+      type: movie
+
+    # Custom Formats - Import TRaSH recommended formats
+    custom_formats:
+      # HD Bluray + WEB quality profile (recommended starting point)
+      # This imports the complete set of custom formats for 1080p content
+      - trash_ids:
+          # Movie Versions (Theatrical, Extended, etc.)
+          - 0f12c086e289cf966fa5948eac571f44  # Hybrid
+          - 570bc9ebecd92723d2d21500f4be314c  # Remaster
+          - eca37840c13c6ef2dd0262b141a5482f  # 4K Remaster
+          - e0c07d59beb37348e975a930d5e50319  # Criterion Collection
+          - 9d27d9d2181838f76dee150882bdc58c  # Masters of Cinema
+          - db9b4c4b53d312a3ca5f1378f6440fc9  # Vinegar Syndrome
+          - 957d0f44b592285f26449575e8b1167e  # Special Edition
+          - eecf3a857724171f968a66cb5719e152  # IMAX
+          - 9f6cbff8cfe4ebbc1bde14c7b7bec0de  # IMAX Enhanced
+
+          # HQ Release Groups
+          - 4d74ac4c4db0b64bff6ce0cffef99bf0  # UHD Bluray Tier 01
+          - a58f517a70193f8e578056642178419d  # UHD Bluray Tier 02
+          - e71939fae578037e7aed3ee219bbe7c1  # UHD Bluray Tier 03
+          - c20f169ef63c5f40c2def54abaf4438e  # WEB Tier 01
+          - 403816d65392c79236dcb6dd591589d4  # WEB Tier 02
+          - af94e0fe497124d1f9ce732069ec8db3  # WEB Tier 03
+
+          # Misc
+          - e7718d7a3ce595f289bfee26adc178f5  # Repack/Proper
+          - ae43b294c69f7ab6dae43ee7f2b3e5e6  # Repack2
+
+          # Unwanted
+          - ed38b889b31be83fda192888e2286d83  # BR-DISK
+          - 90a6f9a284dff5103f6346090e6280c8  # LQ
+          - dc98083864ea246d05a42df0d05f81cc  # x265 (HD)
+          - b8cd450cbfa689c0259a01d9e29ba3d6  # 3D
+          - 7357cf5161efbf8c4d5d0c30b4815ee2  # Obfuscated
+          - ae9b7c9ebde1f3bd336a8cbd1ec4c5e5  # No-RlsGroup
+          - bfd8eb01832d646a0a89c4deb46f8564  # Upscaled
+
+          # Optional
+          - b6832f586342ef70d9c128d40c07b872  # Bad Dual Groups
+          - 90cedc1fea7ea5d11298bebd3d1d3223  # EVO (no WEBDL)
+          - ae9b7c9ebde1f3bd336a8cbd1ec4c5e5  # No-RlsGroup
+          - 7357cf5161efbf8c4d5d0c30b4815ee2  # Obfuscated
+          - 5c44f52a8714fdd79bb4d98e2673be1f  # Retags
+          - f537cf427b64c38c8e36298f657e4828  # Scene
+
+        assign_scores_to:
+          - name: HD Bluray + WEB
+
+    # Quality Profiles - Define download/upgrade behavior
+    quality_profiles:
+      - name: HD Bluray + WEB
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: true
+          until_quality: Bluray-1080p
+          until_score: 10000
+        min_format_score: 0
+        quality_sort: top
+        qualities:
+          - name: Bluray-1080p
+          - name: WEB 1080p
+            qualities:
+              - WEBDL-1080p
+              - WEBRip-1080p
+          - name: Bluray-720p
+          - name: WEB 720p
+            qualities:
+              - WEBDL-720p
+              - WEBRip-720p
+
+# Sonarr Configuration
+sonarr:
+  sonarr-main:
+    base_url: http://sonarr:8989
+    api_key: !env_var SONARR_API_KEY
+
+    # Delete custom formats not in TRaSH Guides
+    delete_old_custom_formats: true
+
+    # Replace existing custom formats with TRaSH versions
+    replace_existing_custom_formats: true
+
+    # Release Profiles (Sonarr v3) or Custom Formats (Sonarr v4)
+    # Using v4 custom formats
+    custom_formats:
+      # WEB-DL quality profile (recommended for TV shows)
+      - trash_ids:
+          # Streaming Services
+          - d660701077794679fd59e8bdf4ce3a29  # AMZN
+          - f67c9ca88f463a48346062e8ad07713f  # ATVP
+          - 77a7b25585c18af08f60b1547bb9b4fb  # CC
+          - 36b72f59f4ea20aad9316f475f2d9fbb  # DCU
+          - 89358767a60cc28783cdc3d0be9388a4  # DSNP
+          - 7a235133c87f7da4c8cccceca7e3c7a6  # HBO
+          - a880d6abc21e7c16884f3ae393f84179  # HMAX
+          - f6cce30f1733d5c8194222a7507909bb  # HULU
+          - 0ac24a2a68a9700bcb7eeca8e5cd644c  # iT
+          - d34870697c9db575f17700212167be23  # NF
+          - b2b980877494b560443631eb1f473867  # NLZ
+          - fb1a91cdc0f26f7ca0696e0e95274645  # OViD
+          - 1656adc6d7bb2c8cca6acfb6592db421  # PCOK
+          - c67a75ae4a1715f2bb4d492755ba4195  # PMTP
+          - 3ac5d84fce98bab1b531393e9c82f467  # QIBI
+          - c30d2958827d1867c73318a5a2957eb1  # RED
+          - ae58039e1319178e6be73caab5c42166  # SHO
+          - 1efe8da11bfd74fbbcd4d8117ddb9213  # STAN
+          - 43b3cf48cb385cd3eac608ee6bca7f09  # UHD Streaming Boost
+          - d2d299244a92b8a52d4921ce3897a256  # UHD Streaming Cut
+
+          # HQ Release Groups
+          - d0c516072f5b2c61b7f0e59be770fc75  # WEB Tier 01
+          - e6258996055b9fbab7e9cb2f75819294  # WEB Tier 02
+          - 58790d4e2fdcd9733aa7ae68ba2bb503  # WEB Tier 03
+
+          # Misc
+          - ec8fa7296b64e8cd390a1600981f3923  # Repack/Proper
+          - eb3d5cc0a2be0db205fb823640db6a3c  # Repack2
+
+          # Unwanted
+          - 32b367365729d530ca1c124a0b180c64  # Bad Dual Groups
+          - 82d40da2bc6923f41e14394075dd4b03  # No-RlsGroup
+          - e1a997ddb54e3ecbfe06341ad323c458  # Obfuscated
+          - 06d66ab109d4d2eddb2794d21526d140  # Retags
+          - 1b3994c551cbb92a2c781af061f4ab44  # Scene
+          - fbcb31d8dabd2a319072b84fc0b7249c  # Extras
+          - 15a05bc7c1a36e2b57fd628f8977e2fc  # AV1
+          - 47435ece6b99a0b477caf360e79ba0bb  # x265 (HD)
+
+        assign_scores_to:
+          - name: WEB-1080p
+
+    # Quality Profiles
+    quality_profiles:
+      - name: WEB-1080p
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: true
+          until_quality: WEB 1080p
+          until_score: 10000
+        min_format_score: 0
+        quality_sort: top
+        qualities:
+          - name: WEB 1080p
+            qualities:
+              - WEBDL-1080p
+              - WEBRip-1080p
+          - name: HDTV-1080p
+          - name: WEB 720p
+            qualities:
+              - WEBDL-720p
+              - WEBRip-720p
+          - name: HDTV-720p
+          - name: WEB 480p
+            qualities:
+              - WEBDL-480p
+              - WEBRip-480p
+          - name: DVD

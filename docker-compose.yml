@@ -245,6 +245,17 @@ services:
       - REMOTE_BACKUP_PATH=${REMOTE_BACKUP_PATH}
     working_dir: /workspace
 
+  recyclarr:
+    build: ./recyclarr
+    container_name: recyclarr
+    profiles:
+      - tools
+    volumes:
+      - ./recyclarr:/config
+    environment:
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - SONARR_API_KEY=${SONARR_API_KEY}
+
 networks:
   proxy:
     name: proxy
