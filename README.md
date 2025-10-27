@@ -9,6 +9,7 @@ Self-hosted media automation stack built with Docker, configured following [TRaS
 | **Traefik** | 80, 443 | Reverse proxy with automatic HTTPS | https://traefik.${DOMAIN} |
 | **Gluetun** | - | VPN container (NordVPN) | - |
 | **Plex** | 32400 | Media streaming server | https://plex.${DOMAIN} (external)<br>http://dev.local:32400 (internal) |
+| **Tautulli** | 8181 | Plex monitoring and analytics | http://dev.local:8181 |
 | **Radarr** | 7878 | Movie library management & automation | http://dev.local:7878 |
 | **Prowlarr** | 9696 | Indexer management (centralized) | http://dev.local:9696 |
 | **Overseerr** | 5055 | Media request management | https://requests.${DOMAIN} (external)<br>http://dev.local:5055 (internal) |
@@ -64,7 +65,9 @@ torrents/
 │   ├── overseerr/    # Overseerr database and settings
 │   ├── plex/         # Plex Media Server data
 │   ├── prowlarr/     # Prowlarr indexer configs
-│   └── radarr/       # Radarr database and settings
+│   ├── radarr/       # Radarr database and settings
+│   ├── sonarr/       # Sonarr database and settings
+│   └── tautulli/     # Tautulli monitoring and statistics
 ├── docker-compose.yml
 └── README.md
 ```
@@ -105,6 +108,11 @@ These are created automatically on first run. Find them in each service's web UI
 **Overseerr** (http://dev.local:5055)
 - Location: Settings → General → API Key
 - Also stored in: `configs/overseerr/settings.json`
+
+**Tautulli** (http://dev.local:8181)
+- Configuration: Auto-generated on first run
+- Plex connection: Requires Plex URL and token (configured in setup wizard)
+- Also stored in: `configs/tautulli/config.ini`
 
 **Deluge**
 - Web UI Password: Configured via `.env` file
@@ -171,6 +179,29 @@ These are created automatically on first run. Find them in each service's web UI
 - Plex full scan: Daily at 3 AM
 - Radarr scan: Daily at 4 AM
 - Download sync: Every minute
+
+### Tautulli
+
+**Initial Setup** (http://dev.local:8181):
+1. Access Tautulli web UI on first run
+2. Follow setup wizard:
+   - **Plex URL**: `http://plex:32400` (Docker network)
+   - **Plex Token**: Get from Plex Settings → General → X-Plex-Token (in browser URL)
+     - Or copy from existing `.env` if using PLEX_CLAIM_TOKEN
+3. Complete initial configuration
+
+**Key Features**:
+- Real-time stream monitoring
+- Watch history and user statistics
+- Visual analytics and graphs
+- Customizable notifications (Discord, Email, etc.)
+- Newsletter generation for new content
+
+**Optional Configuration**:
+- **Plex LogViewer**: Already configured via volume mount (`./configs/plex:/plex-logs:ro`)
+  - Enable in Tautulli: Settings → Plex Media Server → Show Advanced → Logs Folder: `/plex-logs/Plex Media Server/Logs`
+- **Notifications**: Settings → Notification Agents → Add agent
+- **Mobile Access**: Download Tautulli Remote app (iOS/Android)
 
 ## Workflow
 
@@ -906,8 +937,10 @@ If Radarr can't set categories in Deluge:
 - [ ] Configure custom formats in Radarr (optional)
 - [ ] Set up Sonarr for TV shows (optional)
 - [ ] Configure notifications (Discord, Email, etc.)
+- [ ] Set up Tautulli notifications for stream activity
 - [x] Add VPN container for secure torrenting
 - [x] Set up reverse proxy with HTTPS
+- [x] Add Tautulli for Plex monitoring
 - [ ] Configure DNS records for Traefik domains
 - [ ] Set up router port forwarding (80, 443)
 

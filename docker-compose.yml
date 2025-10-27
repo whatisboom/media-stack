@@ -111,6 +111,26 @@ services:
       - proxy
     restart: unless-stopped
 
+  tautulli:
+    image: lscr.io/linuxserver/tautulli:latest
+    container_name: tautulli
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ./configs/tautulli:/config
+      - ./configs/plex:/plex-logs:ro
+    ports:
+      - 8181:8181
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
   radarr:
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr

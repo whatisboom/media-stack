@@ -29,6 +29,8 @@ Overseerr (Requests)
                        Deluge (Download Client) ──→ Gluetun (VPN Container)
                                      ↓                       ↓
                             Plex (Media Streaming)    NordVPN (OpenVPN)
+                                     ↓
+                            Tautulli (Plex Monitoring)
 ```
 
 **Movie Request Flow:**
@@ -89,6 +91,7 @@ Overseerr (Requests)
 - Overseerr → Plex: `plex:32400`
 - Overseerr → Radarr: `radarr:7878`
 - Overseerr → Sonarr: `sonarr:8989`
+- Tautulli → Plex: `plex:32400`
 - External → Services: via Traefik (domain-based routing)
 
 **Port Exposure:**
@@ -126,11 +129,13 @@ docker exec radarr nc -zv gluetun 8112  # Note: deluge is via gluetun
 docker exec sonarr nc -zv gluetun 8112
 docker exec prowlarr nc -zv radarr 7878
 docker exec prowlarr nc -zv sonarr 8989
+docker exec tautulli nc -zv plex 32400
 
 # Access service shells
 docker exec -it radarr /bin/bash
 docker exec -it sonarr /bin/bash
 docker exec -it deluge /bin/bash
+docker exec -it tautulli /bin/bash
 docker exec -it gluetun sh
 
 # Check VPN status and public IP
@@ -156,6 +161,7 @@ docker compose logs traefik | grep -i "certificate"
 - Sonarr: `configs/sonarr/config.xml`
 - Prowlarr: `configs/prowlarr/config.xml`
 - Overseerr: `configs/overseerr/settings.json`
+- Tautulli: `configs/tautulli/config.ini`
 - Deluge: `configs/deluge/auth`
 
 ### Service Configuration Files
@@ -201,6 +207,13 @@ docker compose logs traefik | grep -i "certificate"
 - TLS: Automatic cert resolver via Let's Encrypt
 - Entrypoints: web (80) and websecure (443)
 - Middleware: Basic auth for dashboard
+
+**Tautulli** (`configs/tautulli/config.ini`):
+- Plex connection settings (URL and token)
+- Notification agent configurations
+- User and library settings
+- Watch history and statistics database
+- Optional Plex logs path for LogViewer feature
 
 ## TRaSH Guides Compliance
 
@@ -276,10 +289,25 @@ This setup follows TRaSH Guides best practices:
 - Check Traefik dashboard for registered routers and services
 - Test internal connectivity: `docker exec traefik wget -O- http://plex:32400`
 
+### Tautulli Can't Connect to Plex
+- Verify Plex is running: `docker compose ps plex`
+- Test connectivity: `docker exec tautulli nc -zv plex 32400`
+- Use Plex URL: `http://plex:32400` (Docker network)
+- Get Plex token from: Settings → General → X-Plex-Token parameter in browser
+- Check logs: `docker compose logs -f tautulli`
+
+### Tautulli Not Showing Stream Activity
+- Verify Plex connection in Tautulli: Settings → Plex Media Server
+- Check Plex token is valid
+- Verify Tautulli has permissions to access Plex
+- Check activity feed refresh interval in Tautulli settings
+- Restart Tautulli: `docker compose restart tautulli`
+
 ## Access URLs
 
 **Internal Access** (local network):
 - Plex: http://dev.local:32400
+- Tautulli: http://dev.local:8181
 - Radarr: http://dev.local:7878
 - Sonarr: http://dev.local:8989
 - Prowlarr: http://dev.local:9696
