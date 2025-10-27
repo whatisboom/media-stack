@@ -18,7 +18,7 @@ services:
     volumes:
       - ./configs/plex:/config
       - /tmp/plex:/transcode
-      - /Volumes/Samsung_T5/Movies:/data
+      - /Volumes/Samsung_T5:/data
     restart: unless-stopped
 
   radarr:
@@ -30,7 +30,7 @@ services:
       - TZ=${TZ:-America/Chicago}
     volumes:
       - ./configs/radarr:/config
-      - /Volumes/Samsung_T5/Movies:/movies
+      - /Volumes/Samsung_T5:/data
     ports:
       - 7878:7878
     restart: unless-stopped
@@ -57,7 +57,7 @@ services:
       - DELUGE_LOGLEVEL=error #optional
     volumes:
       - ./configs/deluge:/config
-      - /Volumes/Samsung_T5/Downloads:/downloads
+      - /Volumes/Samsung_T5:/data
     ports:
       - 8112:8112
       - 6881:6881

@@ -63,9 +63,14 @@ torrents/
 
 ## Volume Mappings
 
-### Download & Media Paths
-- **Downloads**: `/Volumes/Samsung_T5/Downloads` → Container: `/downloads`
-- **Movies**: `/Volumes/Samsung_T5/Movies` → Container: `/movies` (Radarr) / `/data` (Plex)
+### Unified Data Path (TRaSH Guides Compliant)
+All services mount the parent directory for hardlink support:
+- **Host Path**: `/Volumes/Samsung_T5` → Container: `/data`
+
+This allows:
+- **Downloads**: `/data/Downloads` (visible to all services)
+- **Movies**: `/data/Movies` (visible to all services)
+- **Hardlinks**: Work properly (same filesystem)
 
 ### Config Paths
 All configs stored in `./configs/[service-name]` and mounted to respective container config paths.
@@ -104,6 +109,7 @@ These are created automatically on first run. Find them in each service's web UI
 **Download Client**: Deluge
 - Host: `deluge` (Docker network)
 - Port: 8112 (Web UI)
+- Download Path: `/data/Downloads`
 - Category: `radarr-movies`
 - Auto-managed by Labels plugin
 
@@ -121,7 +127,7 @@ These are created automatically on first run. Find them in each service's web UI
 ### Deluge
 
 **Key Settings**:
-- Download location: `/downloads`
+- Download location: `/data/Downloads`
 - Listen ports: 6881-6891
 - Encryption: Full Stream (level 2)
 - Active torrents: 8 max (3 downloading, 5 seeding)
@@ -149,7 +155,7 @@ These are created automatically on first run. Find them in each service's web UI
 - **Plex**: Connected and configured
 - **Radarr**:
   - Profile: Ultra-HD
-  - Root folder: `/movies`
+  - Root folder: `/data/Movies`
   - Minimum availability: Released
 
 **Scheduled Jobs**:
@@ -163,8 +169,8 @@ These are created automatically on first run. Find them in each service's web UI
 1. **Request** → User requests movie via Overseerr
 2. **Search** → Radarr searches configured indexers (via Prowlarr)
 3. **Download** → Radarr sends torrent to Deluge with category `radarr-movies`
-4. **Monitor** → Radarr monitors download progress
-5. **Import** → When complete, Radarr imports to `/movies` with proper naming
+4. **Monitor** → Radarr monitors download progress in `/data/Downloads`
+5. **Import** → When complete, Radarr hardlinks/moves to `/data/Movies` with proper naming
 6. **Seed** → Deluge continues seeding until ratio/time goals met
 7. **Stream** → Plex makes movie available for streaming
 
@@ -180,7 +186,7 @@ This setup follows [TRaSH Guides](https://trash-guides.info/) recommendations:
 - ✅ Seed goals in indexer settings (not download client)
 
 ### Hardlinks
-For optimal performance, ensure `/downloads` and `/movies` are on the same filesystem to support hardlinks (instant moves, space-efficient).
+All services mount `/Volumes/Samsung_T5` as `/data`, ensuring `/data/Downloads` and `/data/Movies` are on the same filesystem. This enables hardlinks for instant moves and space-efficient operations (file exists in both locations but only uses space once).
 
 ### Private Trackers
 If using private trackers, disable DHT, LSD, and UPnP in Deluge:

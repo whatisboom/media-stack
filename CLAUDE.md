@@ -24,21 +24,27 @@ Plex (Media Streaming)
 1. Overseerr receives movie request
 2. Radarr searches indexers (managed by Prowlarr)
 3. Radarr sends torrent to Deluge with category `radarr-movies`
-4. Deluge downloads to `/downloads`
-5. Radarr imports completed download to `/movies` with proper naming
-6. Plex scans and makes available for streaming
+4. Deluge downloads to `/data/Downloads`
+5. Radarr hardlinks/moves from `/data/Downloads` to `/data/Movies` with proper naming
+6. Plex scans `/data/Movies` and makes available for streaming
 
 ### Volume Architecture
 
-**Critical: Hardlinks Requirement**
-- `/downloads` and `/movies` MUST be on same filesystem for hardlinks
-- Current setup: Both on `/Volumes/Samsung_T5/`
-- Hardlinks enable instant moves and prevent duplicate storage
+**Critical: TRaSH Guides Compliant Unified Mount**
+- All services mount parent directory: `/Volumes/Samsung_T5` → `/data`
+- This ensures `/data/Downloads` and `/data/Movies` appear as same filesystem
+- Hardlinks work properly (instant moves, no duplicate storage)
 
 **Volume Mappings:**
-- Downloads: `/Volumes/Samsung_T5/Downloads` → `/downloads`
-- Movies: `/Volumes/Samsung_T5/Movies` → `/movies` (Radarr) / `/data` (Plex)
+- All Services: `/Volumes/Samsung_T5` → `/data`
+  - Downloads visible at: `/data/Downloads`
+  - Movies visible at: `/data/Movies`
 - Configs: `./configs/[service]` → service-specific paths
+
+**Why This Structure:**
+- Avoids "split mount" problem that breaks hardlinks
+- Radarr can see both download source and import destination
+- No remote path mapping needed
 
 ### Network Architecture
 
@@ -104,7 +110,7 @@ docker exec -it deluge /bin/bash
 - Indexer connections (synced from Prowlarr)
 
 **Deluge** (`configs/deluge/core.conf`):
-- Download paths
+- Download path: `/data/Downloads`
 - Seed ratios and time limits
 - Port configuration
 - Plugin settings (Labels plugin required for categorization)
@@ -137,8 +143,9 @@ This setup follows TRaSH Guides best practices:
 - Test in Radarr: Settings → Download Clients → Test
 
 ### Downloads Not Importing
-- Check paths match: Radarr sees same `/downloads` as Deluge
-- Verify hardlinks working (same filesystem)
+- Check paths match: Radarr sees `/data/Downloads` where Deluge downloads
+- Verify root folder set to `/data/Movies` in Radarr
+- Verify hardlinks working (same filesystem, both under `/data`)
 - Check Radarr logs: `docker compose logs -f radarr`
 
 ### Prowlarr Indexers Not Syncing
@@ -147,7 +154,8 @@ This setup follows TRaSH Guides best practices:
 - Force sync in Prowlarr UI
 
 ### Plex Not Seeing New Media
-- Verify volume mount: `/Volumes/Samsung_T5/Movies` mounted to `/data`
+- Verify volume mount: `/Volumes/Samsung_T5` mounted to `/data`
+- Verify library path set to `/data/Movies` in Plex
 - Check Overseerr scheduled job (Plex scan every 5 min)
 - Manual scan: Plex UI → Library → Scan Library Files
 
@@ -166,3 +174,23 @@ All services accessible at `dev.local`:
 - Deluge default username: `admin` (password set in `.env`)
 - First-time setup requires accessing each service to complete initial configuration
 - API keys auto-generate on first run and persist in `configs/` directory
+
+### Required UI Configuration After Volume Changes
+
+After changing volume mounts, update paths in service UIs:
+
+**Radarr** (http://dev.local:7878):
+- Settings → Media Management → Root Folders
+  - Update existing root folder from `/movies` to `/data/Movies`
+  - OR delete old and add new root folder
+- Settings → Download Clients → Deluge
+  - Verify "Remote Path" shows `/data/Downloads`
+
+**Plex** (http://dev.local:32400):
+- Library Settings
+  - Update library path from `/data` to `/data/Movies`
+  - OR remove and re-add library with new path
+
+**Overseerr** (http://dev.local:5055):
+- Settings → Radarr
+  - Update root folder to `/data/Movies`
