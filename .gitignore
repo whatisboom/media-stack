@@ -3,6 +3,7 @@
 
 # Application configs (contains auto-generated API keys, databases, and VPN configs)
 configs/
+!configs/.gitkeep
 
 # Claude Code user-specific settings
 .claude/
@@ -23,6 +24,7 @@ logs/.health_state.json
 
 # Backups (contains configs and secrets)
 backups/
+!backups/.gitkeep
 
 # Backup rclone config (contains R2 credentials)
 backup/rclone.conf

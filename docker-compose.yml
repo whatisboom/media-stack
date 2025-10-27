@@ -31,6 +31,14 @@ services:
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
       - "traefik.http.routers.dashboard.middlewares=auth"
       - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 30s
@@ -67,6 +75,14 @@ services:
       - HTTPPROXY=off
       - SHADOWSOCKS=off
       - HEALTH_VPN_DURATION_INITIAL=30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
     healthcheck:
       test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
       interval: 60s
@@ -101,6 +117,14 @@ services:
       - "traefik.http.routers.plex.entrypoints=websecure"
       - "traefik.http.routers.plex.tls.certresolver=letsencrypt"
       - "traefik.http.services.plex.loadbalancer.server.port=32400"
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:32400/web/index.html"]
       interval: 30s
@@ -123,6 +147,14 @@ services:
       - ./configs/plex:/plex-logs:ro
     ports:
       - 8181:8181
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8181"]
       interval: 30s
@@ -145,6 +177,14 @@ services:
       - /Volumes/Samsung_T5:/data
     ports:
       - 7878:7878
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:7878/ping"]
       interval: 30s
@@ -165,6 +205,14 @@ services:
       - /Volumes/Samsung_T5:/data
     ports:
       - 8989:8989
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8989/ping"]
       interval: 30s
@@ -185,6 +233,14 @@ services:
       - /Volumes/Samsung_T5:/data
     ports:
       - 6767:6767
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 128M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6767"]
       interval: 30s
@@ -210,6 +266,14 @@ services:
       - "traefik.http.routers.overseerr.entrypoints=websecure"
       - "traefik.http.routers.overseerr.tls.certresolver=letsencrypt"
       - "traefik.http.services.overseerr.loadbalancer.server.port=5055"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 128M
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5055/api/v1/status"]
       interval: 30s
@@ -231,6 +295,14 @@ services:
     volumes:
       - ./configs/deluge:/config
       - /Volumes/Samsung_T5:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     depends_on:
       - gluetun
     restart: unless-stopped
@@ -246,6 +318,14 @@ services:
       - ./configs/prowlarr:/config
     ports:
       - 9696:9696
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 128M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9696/ping"]
       interval: 30s
@@ -265,6 +345,14 @@ services:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - DISK_SPACE_THRESHOLD=${DISK_SPACE_THRESHOLD:-10}
       - ALERT_COOLDOWN=${ALERT_COOLDOWN:-3600}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     restart: unless-stopped
     depends_on:
       - traefik
@@ -288,6 +376,14 @@ services:
       - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 3 * * 1}
       - TZ=${TZ:-America/Chicago}
       - RUN_ON_STARTUP=false
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     working_dir: /workspace
     restart: unless-stopped
 
@@ -316,6 +412,14 @@ services:
       - WATCHTOWER_INCLUDE_STOPPED=false
       - WATCHTOWER_CLEANUP=false
       - TZ=${TZ:-America/Chicago}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     restart: unless-stopped
 
 networks:
