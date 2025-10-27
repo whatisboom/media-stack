@@ -33,7 +33,6 @@ Self-hosted media automation stack built with Docker, configured following [TRaS
      - **IMPORTANT**: Use "Service credentials" NOT your regular NordVPN account login
      - Go to "Set up NordVPN manually" → "Service credentials"
    - Adjust `TZ` if needed (default: America/Chicago)
-   - Optional: Set `NORDVPN_COUNTRY` for preferred VPN server location
 
 3. **Start services**:
    ```bash
@@ -183,6 +182,526 @@ These are created automatically on first run. Find them in each service's web UI
 6. **Seed** → Deluge continues seeding until ratio/time goals met
 7. **Stream** → Plex makes movie available for streaming
 
+## Deleting Movies and TV Shows
+
+### Quick Deletion
+
+**Delete a Movie (Radarr)**:
+1. Open Radarr: http://dev.local:7878
+2. Navigate to **Library** or find the movie
+3. Click the movie → **Edit** (pencil icon)
+4. Click **Delete** at the bottom
+5. Choose deletion options:
+   - ✅ **Delete movie files** - Removes files from `/data/Movies`
+   - ⬜ **Add exclusion** - Prevents re-downloading (optional)
+6. Click **Delete** to confirm
+
+**Delete a TV Show (Sonarr)**:
+1. Open Sonarr: http://dev.local:8989
+2. Navigate to **Series** or find the show
+3. Click the show → **Edit** (pencil icon)
+4. Click **Delete** at the bottom
+5. Choose deletion options:
+   - ✅ **Delete series folder** - Removes files from `/data/Shows`
+   - ⬜ **Add exclusion** - Prevents re-downloading (optional)
+6. Click **Delete** to confirm
+
+### Complete Deletion (All Traces)
+
+To fully remove media and free disk space, follow these steps in order:
+
+#### 1. Delete from Radarr/Sonarr
+
+Follow the Quick Deletion steps above. **Important**:
+- Enable "Delete files" option to remove from filesystem
+- This removes the library entry and files
+- Does **NOT** automatically remove the torrent from Deluge
+
+#### 2. Remove Torrent from Deluge
+
+**Option A: Manual Removal** (Immediate)
+1. Open Deluge: http://dev.local:8112
+2. Find the torrent (filter by category: `radarr-movies` or `sonarr-tv`)
+3. Right-click → **Remove Torrent**
+4. Choose removal options:
+   - ✅ **Remove torrent** - Removes from Deluge
+   - ✅ **Remove data** - Deletes files from `/data/Downloads`
+5. Click **Remove**
+
+**Option B: Wait for Seed Goals** (Recommended for private trackers)
+- Deluge will automatically stop seeding when ratio/time goals are met
+- Radarr/Sonarr can auto-remove completed torrents if configured
+- Preserves private tracker ratio requirements
+
+**Check Seed Status**:
+```bash
+# View active torrents and their seed ratios
+docker exec deluge deluge-console info
+```
+
+#### 3. Clean Up Plex Library
+
+After deleting files, Plex needs to be updated:
+
+**Automatic Cleanup** (Recommended):
+1. Open Plex: http://dev.local:32400
+2. Go to **Settings** → **Library**
+3. Enable **"Empty trash automatically after every scan"**
+4. Plex will auto-remove deleted media on next scheduled scan (every 5 min via Overseerr)
+
+**Manual Cleanup**:
+1. Open Plex: http://dev.local:32400
+2. Navigate to the **Movies** or **TV Shows** library
+3. Click **...** (library menu) → **Empty Trash**
+4. Optional: **Settings** → **Manage** → **Troubleshooting** → **Clean Bundles** (removes unused artwork)
+
+**Verify Removal**:
+- Search for the deleted title in Plex
+- It should no longer appear in your library
+
+#### 4. Optional: Remove Request from Overseerr
+
+Overseerr keeps request history even after media is deleted. To remove:
+
+**Manual Removal**:
+1. Open Overseerr: http://dev.local:5055
+2. Go to **Requests** or search for the title
+3. Click on the request → **Delete Request** (if available)
+
+**Note**: Overseerr doesn't currently support bulk request deletion via UI. Request history is mostly harmless and can be left alone.
+
+#### 5. Verify Complete Deletion
+
+**Check filesystem**:
+```bash
+# Verify file is removed from media directory
+ls -lh /Volumes/Samsung_T5/Movies/ | grep "Movie Title"
+ls -lh /Volumes/Samsung_T5/Shows/ | grep "Show Title"
+
+# Check if still in downloads (if torrent still seeding)
+ls -lh /Volumes/Samsung_T5/Downloads/
+```
+
+**Check disk space**:
+```bash
+# View disk usage
+df -h /Volumes/Samsung_T5/
+```
+
+### Important Considerations
+
+#### Hardlinks and Disk Space
+
+**How Hardlinks Work**:
+- When Radarr/Sonarr imports media, they create **hardlinks** (not copies)
+- Same file appears in both `/data/Downloads` and `/data/Movies` or `/data/Shows`
+- **Only uses disk space once** (instant "move", space-efficient)
+
+**Deletion Behavior**:
+- Deleting from Radarr/Sonarr removes the file in `/data/Movies` or `/data/Shows`
+- If torrent is still seeding, the file remains in `/data/Downloads`
+- **Disk space is NOT freed until BOTH are removed**
+
+**To Free Disk Space**:
+1. Delete from Radarr/Sonarr (removes media library hardlink)
+2. Remove torrent and data from Deluge (removes download hardlink)
+3. Both hardlinks must be removed to free disk space
+
+#### Private Tracker Seeding
+
+**CRITICAL**: Removing torrents before meeting seed requirements can harm your ratio and risk account bans.
+
+**Best Practices**:
+- Check indexer/tracker requirements before deleting
+- Let torrents seed to completion (ratio ≥ 1.0-2.0, time ≥ 7 days typical)
+- Use Deluge's seeding filters to monitor progress
+- Configure seed goals in Prowlarr per indexer
+
+**Seed Goal Configuration**:
+1. Open Prowlarr: http://dev.local:9696
+2. Go to **Settings** → **Indexers**
+3. For each private tracker:
+   - Set **Seed Ratio**: 2.0 (or tracker requirement + 10-20%)
+   - Set **Seed Time**: 10080 minutes (7 days, or tracker requirement)
+
+#### Automatic Torrent Removal
+
+**Enable in Radarr/Sonarr** (Optional):
+1. Go to **Settings** → **Download Client** → Click your Deluge client
+2. Scroll to **Completed Download Handling**
+3. Enable **"Remove Completed"**
+4. Radarr/Sonarr will auto-remove torrents after seed goals are met
+
+**Requirements for Auto-Removal**:
+- Seed goals must be configured in Prowlarr (per indexer)
+- Torrent must be **stopped/paused** in Deluge
+- Torrent must remain in same category (`radarr-movies`, `sonarr-tv`)
+
+### Common Issues
+
+#### "Files Still Showing in Plex After Deletion"
+
+**Cause**: Plex hasn't scanned for changes or trash not emptied
+
+**Solution**:
+1. Manually scan library: **Library** → **...** → **Scan Library Files**
+2. Empty trash: **Library** → **...** → **Empty Trash**
+3. Wait for scheduled scan (Overseerr triggers every 5 min)
+
+#### "Torrent Still Seeding After Movie Removed"
+
+**Cause**: This is expected behavior - torrents continue seeding independently
+
+**Solution**:
+- **If private tracker**: Let it seed to completion (protect your ratio)
+- **If public tracker**: Manually remove from Deluge
+- **If ratio met**: Stop torrent in Deluge, wait for Radarr/Sonarr auto-removal
+
+#### "Disk Space Not Freed After Deletion"
+
+**Cause**: Hardlink still exists in `/data/Downloads` (torrent still seeding)
+
+**Solution**:
+1. Check Deluge for active torrents: http://dev.local:8112
+2. Verify file exists in downloads:
+   ```bash
+   ls -lh /Volumes/Samsung_T5/Downloads/
+   ```
+3. Remove torrent AND data from Deluge (or wait for seed completion)
+4. Verify space freed: `df -h /Volumes/Samsung_T5/`
+
+#### "Cannot Re-Request Deleted Media in Overseerr"
+
+**Cause**: Media may still exist in Radarr/Sonarr database or Overseerr cache
+
+**Solution**:
+1. Verify complete removal from Radarr/Sonarr library
+2. In Overseerr: **Media** → Find title → **Clear Media Data**
+3. Wait 5-10 minutes for Overseerr to sync with Radarr/Sonarr
+4. Try requesting again
+
+### Automation Recommendations
+
+**For hands-off operation**:
+
+1. **Enable automatic Plex trash cleanup**:
+   - **Settings** → **Library** → **Empty trash automatically after every scan**
+
+2. **Enable automatic torrent removal** (after seed goals met):
+   - Configure in Radarr/Sonarr download client settings
+   - Set seed goals in Prowlarr per indexer
+
+3. **Configure seed goals conservatively**:
+   - Private trackers: Follow exact requirements + buffer (e.g., ratio 2.0, time 7 days)
+   - Public trackers: Reasonable goals (e.g., ratio 1.5, time 3 days)
+
+**Manual oversight recommended for**:
+- Private tracker torrents (verify ratio requirements)
+- Large files (ensure adequate seeding)
+- Rare/hard-to-find media (contribute back to community)
+
+## Monitoring & Health Checks
+
+### Service Health Status
+
+All services are configured with health checks that run automatically:
+
+```bash
+# View health status of all services
+docker compose ps
+
+# Check detailed health information
+docker inspect --format='{{.State.Health.Status}}' <service-name>
+```
+
+Health check intervals:
+- **Traefik**: Every 30s (ping endpoint)
+- **Gluetun**: Every 60s (VPN connectivity)
+- **Plex**: Every 30s (web interface)
+- **Radarr/Sonarr**: Every 30s (API ping)
+- **Prowlarr**: Every 30s (API ping)
+- **Overseerr**: Every 30s (status endpoint)
+
+### Automated Health Monitoring
+
+The health monitoring system runs in a dedicated Docker container:
+
+**Features:**
+- ✅ Containerized (portable, no host dependencies)
+- ✅ Automated checks every 15 minutes
+- ✅ Monitors Docker service health status
+- ✅ Verifies VPN connectivity (ensures real IP is hidden)
+- ✅ Tracks disk space (alerts when below threshold)
+- ✅ Sends color-coded Discord notifications
+  - 🔴 Red: Service failures
+  - ✅ Green: Service recoveries
+  - ⚠️ Yellow: Low disk space
+- ✅ State tracking (detects failures and recoveries)
+- ✅ Separate alert cooldowns (failure vs recovery vs disk)
+- ✅ Detailed logging to `logs/health-monitor.log`
+
+**Container Management:**
+
+```bash
+# View monitoring logs
+docker compose logs -f health-monitor
+
+# Manual health check (verbose)
+docker compose exec health-monitor /usr/local/bin/health-monitor.sh -v
+
+# Restart monitoring container
+docker compose restart health-monitor
+
+# Rebuild after script changes
+docker compose build health-monitor
+docker compose up -d health-monitor
+```
+
+### Setting Up Discord Alerts
+
+1. **Create Discord Webhook**:
+   - Open Discord → Server Settings → Integrations → Webhooks
+   - Click "New Webhook" or select existing one
+   - Customize name (e.g., "Media Stack Alerts") and select channel
+   - Click "Copy Webhook URL"
+
+2. **Configure Webhook in .env**:
+   ```bash
+   DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/123456789/your-webhook-token
+
+   # Optional: Customize thresholds
+   DISK_SPACE_THRESHOLD=10          # Alert when < 10GB free
+   ALERT_COOLDOWN=3600               # Wait 1 hour between duplicate alerts
+   ```
+
+3. **Test Alerts**:
+   ```bash
+   # Stop a service to trigger failure alert (red)
+   docker compose stop radarr
+
+   # Wait 15 minutes or trigger manual check
+   docker compose exec health-monitor /usr/local/bin/health-monitor.sh -v
+
+   # Check Discord for red failure alert
+
+   # Restart service
+   docker compose start radarr
+
+   # Wait for recovery alert (green)
+   docker compose exec health-monitor /usr/local/bin/health-monitor.sh -v
+   ```
+
+### Automated Monitoring Schedule
+
+The health monitor container runs checks automatically every 15 minutes via cron (configured in `monitoring/crontab`).
+
+**No host setup required** - monitoring runs entirely in the container.
+
+**To change schedule**:
+1. Edit `monitoring/crontab`
+2. Rebuild container: `docker compose build health-monitor`
+3. Restart: `docker compose up -d health-monitor`
+
+**Recommended Review Schedule:**
+- Automated: Every 15 minutes (handled by container)
+- Manual log review: Daily (`docker compose logs health-monitor`)
+- Service log review: Weekly
+
+### Health Check Alerts
+
+You'll receive Discord alerts for:
+
+**Service Failures** (🔴 Red):
+- Container stopped or crashed
+- Health check failing
+- Service becomes unresponsive
+- Includes: service name and state transition (healthy → stopped)
+
+**Service Recoveries** (✅ Green):
+- Container restarted successfully
+- Health check now passing
+- Service restored to healthy state
+- Includes: service name and state transition (stopped → healthy)
+
+**VPN Issues** (🔴 Red):
+- Gluetun container down
+- VPN connection lost
+- Public IP exposed
+- Unable to verify VPN status
+
+**Disk Space Warnings** (⚠️ Yellow):
+- Free space below threshold (default: 10GB)
+- Media disk not mounted
+- Potential storage issues
+
+**Alert Format:**
+Discord alerts include:
+- **Color-coded embeds** (red=failure, green=recovery, yellow=warning)
+- **State transitions** (e.g., "radarr (healthy → stopped)")
+- **Detailed description** of the issue
+- **Suggested remediation** steps with commands
+- **Timestamp** of when issue was detected
+
+**Cooldown System:**
+- Separate cooldowns for failures, recoveries, and disk alerts
+- Default: 1 hour between duplicate alerts
+- Prevents spam while ensuring important updates
+
+### Viewing Logs
+
+```bash
+# View health monitor logs
+tail -f logs/health-monitor.log
+
+# View service logs
+docker compose logs -f [service-name]
+
+# View all logs from last hour
+docker compose logs --since=1h
+
+# Search logs for errors
+docker compose logs | grep -i error
+```
+
+### Common Health Issues
+
+#### Service Shows "unhealthy" Status
+
+**Cause**: Health check endpoint failing
+
+**Solution**:
+1. Check service logs: `docker compose logs -f <service>`
+2. Verify service is responding: `curl http://localhost:<port>/ping`
+3. Restart service: `docker compose restart <service>`
+4. If persists, recreate: `docker compose up -d --force-recreate <service>`
+
+#### VPN Health Check Failing
+
+**Cause**: VPN connection issue or tunnel down
+
+**Solution**:
+1. Check gluetun logs: `docker compose logs -f gluetun`
+2. Verify VPN credentials in `.env`
+3. Test connectivity: `docker exec gluetun wget -qO- ifconfig.me`
+4. Restart gluetun: `docker compose restart gluetun`
+5. Restart Deluge: `docker compose restart deluge`
+
+#### Disk Space Alerts
+
+**Cause**: Media disk filling up
+
+**Solution**:
+1. Check disk usage: `df -h /Volumes/Samsung_T5`
+2. Find large files: `du -sh /Volumes/Samsung_T5/*`
+3. Remove completed torrents: See "Deleting Movies and TV Shows" section
+4. Check for stuck downloads in Deluge
+5. Adjust threshold in `.env` if needed
+
+## Backup & Disaster Recovery
+
+The stack includes automated backup scripts for catastrophic recovery scenarios. Backups are infrequent (monthly recommended) and focused on configuration preservation, not daily versioning.
+
+### What's Backed Up
+
+**Included (~43MB, ~10-12MB compressed):**
+- Service configurations and databases (`configs/`)
+- Secrets and credentials (`.env`)
+- Infrastructure definition (`docker-compose.yml`)
+- Health monitoring scripts (`monitoring/`)
+- Documentation
+
+**Excluded:**
+- Media files (626GB) - can be re-downloaded via Radarr/Sonarr
+- Plex watch history - lost in drive failure
+- Plex logs and cache
+- Temporary files
+
+### Creating Backups
+
+**Manual backup:**
+```bash
+./scripts/backup.sh
+```
+
+**Monthly automated backup (via cron):**
+```bash
+# Add to crontab
+0 3 1 * * cd /Users/brandon/projects/torrents && ./scripts/backup.sh
+```
+
+**With remote sync:**
+```bash
+# Configure in .env
+REMOTE_BACKUP_PATH="s3://my-bucket/backups"      # AWS S3
+REMOTE_BACKUP_PATH="user@server:/backups"        # SSH/rsync
+REMOTE_BACKUP_PATH="/Volumes/External/backups"   # Local path
+
+# Run with sync
+./scripts/backup.sh --remote-sync
+```
+
+**Backup location:** `./backups/media-stack-backup_YYYYMMDD_HHMMSS.tar.gz`
+**Retention:** Last 12 backups (~150MB total)
+
+### Recovery Scenarios
+
+#### Scenario A: Drive Re-mount (2-5 minutes)
+**Situation:** Drive disconnected but data intact
+
+```bash
+# 1. Stop services
+docker compose down
+
+# 2. Re-mount drive at /Volumes/Samsung_T5
+# 3. Verify data
+ls /Volumes/Samsung_T5/{Movies,Shows,Downloads}
+
+# 4. Restart services
+docker compose up -d
+```
+
+**Result:** No data loss, all services restored
+
+#### Scenario B: Complete Drive Failure (hours to days)
+**Situation:** Drive died, all media lost (626GB)
+
+```bash
+# 1. Get replacement drive, mount at /Volumes/Samsung_T5
+# 2. Stop services
+docker compose down
+
+# 3. Restore from backup
+tar xzf backups/media-stack-backup_YYYYMMDD_HHMMSS.tar.gz
+
+# 4. Recreate directory structure
+mkdir -p /Volumes/Samsung_T5/{Downloads,Movies,Shows}
+
+# 5. Start services
+docker compose up -d
+
+# 6. Re-download media
+# In Radarr: Movies → Select All → Search All Missing
+# In Sonarr: Series → Select All → Search All Missing
+```
+
+**Data Recovery:**
+- ✅ Service settings and API keys
+- ✅ Movie/show library lists (from databases)
+- ✅ Indexer configurations
+- ✅ Quality profiles and automations
+- ❌ Actual media files (must re-download)
+- ❌ Plex watch history
+- ❌ Deluge seeding ratios
+
+**For detailed recovery procedures, see:** [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md)
+
+### Disk Usage
+
+| Retention | Uncompressed | Compressed |
+|-----------|--------------|------------|
+| 1 backup | 43MB | 10-12MB |
+| 12 backups (1 year) | 516MB | 120-150MB |
+
 ## Important Notes
 
 ### TRaSH Guides Configuration
@@ -260,11 +779,18 @@ All services mount `/Volumes/Samsung_T5` as `/data`, ensuring `/data/Downloads` 
 - Daemon: 127.0.0.1:58846 (localhost only)
 
 **Changing VPN Server**
-Edit `.env`:
-```bash
-NORDVPN_COUNTRY=United Kingdom  # or Canada, Netherlands, etc.
-```
-Then: `docker compose up -d gluetun`
+
+**Current setup:** VPN uses specific server `us5500.nordvpn.com` for reliability.
+
+**Why:** NordVPN auth servers are unreliable when auto-selecting by country (known gluetun issue). Using a specific server avoids authentication failures.
+
+**To change servers:**
+1. Edit `docker-compose.yml`
+2. Change `SERVER_HOSTNAMES=us5500.nordvpn.com` to a different server
+3. Find server list: https://nordvpn.com/servers/tools/
+4. Recreate container: `docker compose up -d gluetun`
+
+**Recommended servers:** us####.nordvpn.com (US-based servers tend to be more reliable)
 
 ### Traefik Reverse Proxy
 

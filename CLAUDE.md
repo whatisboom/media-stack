@@ -20,14 +20,18 @@ Self-hosted media automation stack using Docker Compose with VPN protection. Ser
 ```
 Overseerr (Requests)
     ↓
-Radarr (Movie Management) → Prowlarr (Indexer Management)
-    ↓
-Deluge (Download Client) ──→ Gluetun (VPN Container)
-    ↓                              ↓
-Plex (Media Streaming)      NordVPN (OpenVPN)
+    ├─→ Radarr (Movie Management) ──┐
+    │                                │
+    └─→ Sonarr (TV Management) ──────┤
+                                     ↓
+                            Prowlarr (Indexer Management)
+                                     ↓
+                       Deluge (Download Client) ──→ Gluetun (VPN Container)
+                                     ↓                       ↓
+                            Plex (Media Streaming)    NordVPN (OpenVPN)
 ```
 
-**Request Flow:**
+**Movie Request Flow:**
 1. Overseerr receives movie request
 2. Radarr searches indexers (managed by Prowlarr)
 3. Radarr sends torrent to Deluge with category `radarr-movies`
@@ -35,22 +39,31 @@ Plex (Media Streaming)      NordVPN (OpenVPN)
 5. Radarr hardlinks/moves from `/data/Downloads` to `/data/Movies` with proper naming
 6. Plex scans `/data/Movies` and makes available for streaming
 
+**TV Show Request Flow:**
+1. Overseerr receives TV show request
+2. Sonarr searches indexers (managed by Prowlarr)
+3. Sonarr sends torrent to Deluge with category `sonarr-tv`
+4. Deluge downloads to `/data/Downloads`
+5. Sonarr hardlinks/moves from `/data/Downloads` to `/data/Shows` with proper naming
+6. Plex scans `/data/Shows` and makes available for streaming
+
 ### Volume Architecture
 
 **Critical: TRaSH Guides Compliant Unified Mount**
 - All services mount parent directory: `/Volumes/Samsung_T5` → `/data`
-- This ensures `/data/Downloads` and `/data/Movies` appear as same filesystem
+- This ensures `/data/Downloads`, `/data/Movies`, and `/data/Shows` appear as same filesystem
 - Hardlinks work properly (instant moves, no duplicate storage)
 
 **Volume Mappings:**
 - All Services: `/Volumes/Samsung_T5` → `/data`
   - Downloads visible at: `/data/Downloads`
   - Movies visible at: `/data/Movies`
+  - TV Shows visible at: `/data/Shows`
 - Configs: `./configs/[service]` → service-specific paths
 
 **Why This Structure:**
 - Avoids "split mount" problem that breaks hardlinks
-- Radarr can see both download source and import destination
+- Radarr and Sonarr can see both download source and import destination
 - No remote path mapping needed
 
 ### Network Architecture
@@ -70,9 +83,12 @@ Plex (Media Streaming)      NordVPN (OpenVPN)
 
 **Inter-Service Communication:**
 - Radarr → Deluge: `gluetun:8112` (Deluge accessible via gluetun's network)
+- Sonarr → Deluge: `gluetun:8112` (Deluge accessible via gluetun's network)
 - Prowlarr → Radarr: `radarr:7878`
+- Prowlarr → Sonarr: `sonarr:8989`
 - Overseerr → Plex: `plex:32400`
 - Overseerr → Radarr: `radarr:7878`
+- Overseerr → Sonarr: `sonarr:8989`
 - External → Services: via Traefik (domain-based routing)
 
 **Port Exposure:**
@@ -107,10 +123,13 @@ docker compose down
 ```bash
 # Test connectivity between services
 docker exec radarr nc -zv gluetun 8112  # Note: deluge is via gluetun
+docker exec sonarr nc -zv gluetun 8112
 docker exec prowlarr nc -zv radarr 7878
+docker exec prowlarr nc -zv sonarr 8989
 
 # Access service shells
 docker exec -it radarr /bin/bash
+docker exec -it sonarr /bin/bash
 docker exec -it deluge /bin/bash
 docker exec -it gluetun sh
 
@@ -134,6 +153,7 @@ docker compose logs traefik | grep -i "certificate"
 
 **API Key Locations:**
 - Radarr: `configs/radarr/config.xml`
+- Sonarr: `configs/sonarr/config.xml`
 - Prowlarr: `configs/prowlarr/config.xml`
 - Overseerr: `configs/overseerr/settings.json`
 - Deluge: `configs/deluge/auth`
@@ -145,6 +165,13 @@ docker compose logs traefik | grep -i "certificate"
 - Naming scheme (TRaSH Guides compliant)
 - Download client settings
 - Indexer connections (synced from Prowlarr)
+
+**Sonarr** (`configs/sonarr/config.xml`):
+- Quality profiles
+- Naming scheme (TRaSH Guides compliant for TV shows)
+- Download client settings
+- Indexer connections (synced from Prowlarr)
+- Series type settings (Standard, Daily, Anime)
 
 **Deluge** (`configs/deluge/core.conf`):
 - Download path: `/data/Downloads`
@@ -160,7 +187,7 @@ docker compose logs traefik | grep -i "certificate"
 
 **Prowlarr** (`configs/prowlarr/config.xml`):
 - Indexer definitions
-- App sync configuration (Radarr connection)
+- App sync configuration (Radarr and Sonarr connections)
 - Category mappings
 
 **Traefik** (`configs/traefik/letsencrypt/acme.json`):
@@ -180,7 +207,8 @@ docker compose logs traefik | grep -i "certificate"
 This setup follows TRaSH Guides best practices:
 
 1. **Naming Scheme**: Prevents download loops by using consistent format
-   - Pattern: `{Movie CleanTitle} {(Release Year)} {{Edition Tags}} {[Custom Formats]}{[Quality Full]}{[MediaInfo AudioCodec} {MediaInfo AudioChannels]}{[MediaInfo VideoDynamicRangeType]}{[Mediainfo VideoCodec]}{-Release Group}`
+   - **Movies (Radarr)**: `{Movie CleanTitle} {(Release Year)} {{Edition Tags}} {[Custom Formats]}{[Quality Full]}{[MediaInfo AudioCodec} {MediaInfo AudioChannels]}{[MediaInfo VideoDynamicRangeType]}{[Mediainfo VideoCodec]}{-Release Group}`
+   - **TV Shows (Sonarr)**: Configure per TRaSH Guides TV naming recommendations
 
 2. **Directory Structure**: Separate download/media directories for hardlinks
 
@@ -203,20 +231,33 @@ This setup follows TRaSH Guides best practices:
 - Restart both containers: `docker compose restart gluetun deluge`
 - Test in Radarr: Settings → Download Clients → Test
 
+### Sonarr Can't Connect to Deluge
+- Verify gluetun is running: `docker compose ps gluetun`
+- Check VPN connection: `docker compose logs gluetun --tail=20`
+- Sonarr must connect to `gluetun:8112` (not `deluge:8112`)
+- Test connectivity: `docker exec sonarr nc -zv gluetun 8112`
+
+### Sonarr Can't Set Categories in Deluge
+- Verify Labels plugin enabled in `configs/deluge/core.conf`
+- Restart both containers: `docker compose restart gluetun deluge`
+- Test in Sonarr: Settings → Download Clients → Test
+
 ### Downloads Not Importing
-- Check paths match: Radarr sees `/data/Downloads` where Deluge downloads
-- Verify root folder set to `/data/Movies` in Radarr
-- Verify hardlinks working (same filesystem, both under `/data`)
-- Check Radarr logs: `docker compose logs -f radarr`
+- Check paths match: Radarr/Sonarr sees `/data/Downloads` where Deluge downloads
+- Verify root folder set to `/data/Movies` in Radarr or `/data/Shows` in Sonarr
+- Verify hardlinks working (same filesystem, all under `/data`)
+- Check logs: `docker compose logs -f radarr` or `docker compose logs -f sonarr`
 
 ### Prowlarr Indexers Not Syncing
-- Verify Radarr API key in Prowlarr app settings
-- Check network connectivity: `docker exec prowlarr nc -zv radarr 7878`
+- Verify Radarr/Sonarr API keys in Prowlarr app settings
+- Check network connectivity: `docker exec prowlarr nc -zv radarr 7878` or `docker exec prowlarr nc -zv sonarr 8989`
 - Force sync in Prowlarr UI
 
 ### Plex Not Seeing New Media
 - Verify volume mount: `/Volumes/Samsung_T5` mounted to `/data`
-- Verify library path set to `/data/Movies` in Plex
+- Verify library paths set correctly in Plex:
+  - Movies: `/data/Movies`
+  - TV Shows: `/data/Shows`
 - Check Overseerr scheduled job (Plex scan every 5 min)
 - Manual scan: Plex UI → Library → Scan Library Files
 
@@ -240,6 +281,7 @@ This setup follows TRaSH Guides best practices:
 **Internal Access** (local network):
 - Plex: http://dev.local:32400
 - Radarr: http://dev.local:7878
+- Sonarr: http://dev.local:8989
 - Prowlarr: http://dev.local:9696
 - Overseerr: http://dev.local:5055
 - Deluge: http://dev.local:8112
@@ -272,18 +314,29 @@ This setup follows TRaSH Guides best practices:
 - All Deluge traffic routes through VPN tunnel
 - Kill switch enabled (network_mode prevents IP leaks)
 - VPN credentials in `.env` (NORDVPN_USER, NORDVPN_PASSWORD)
-- Server location: Configurable via NORDVPN_COUNTRY
+- Current server: us5500.nordvpn.com (hardcoded in docker-compose.yml)
+- **Note:** Using specific server instead of country-based auto-selection due to NordVPN auth reliability issues
 
 **Checking VPN Connection:**
 ```bash
 # View gluetun logs to see VPN status
 docker compose logs gluetun --tail=50
 
-# Check Deluge's public IP (should be VPN IP)
+# Check Deluge's public IP (should be VPN IP, not your real IP)
 docker exec gluetun wget -qO- ifconfig.me
 
-# Restart VPN connection
-docker compose restart gluetun
+# Verify VPN is connected (should see "Initialization Sequence Completed")
+docker compose logs gluetun | grep -i "initialized\|completed"
+```
+
+**Changing VPN Server:**
+```bash
+# Edit docker-compose.yml and change SERVER_HOSTNAMES value
+# Then recreate container (not just restart):
+docker compose up -d gluetun
+
+# Recreate Deluge to reconnect to new gluetun network namespace:
+docker compose up -d deluge
 ```
 
 ## Important Notes
@@ -305,11 +358,34 @@ After changing volume mounts, update paths in service UIs:
 - Settings → Download Clients → Deluge
   - Verify "Remote Path" shows `/data/Downloads`
 
+**Sonarr** (http://dev.local:8989):
+- Settings → Media Management → Root Folders
+  - Add root folder: `/data/Shows`
+- Settings → Download Clients → Deluge
+  - Host: `gluetun` (NOT `deluge`)
+  - Port: `8112`
+  - Password: from `.env` DELUGE_WEB_PASSWORD
+  - Category: `sonarr-tv`
+  - Remote Path: `/data/Downloads`
+
 **Plex** (http://dev.local:32400):
 - Library Settings
-  - Update library path from `/data` to `/data/Movies`
-  - OR remove and re-add library with new path
+  - Movies: `/data/Movies`
+  - TV Shows: `/data/Shows` (add new library if needed)
+  - OR remove and re-add libraries with new paths
+
+**Prowlarr** (http://dev.local:9696):
+- Settings → Apps → Add Application
+  - Add Sonarr:
+    - Sync Level: Full Sync
+    - Sonarr Server: `http://sonarr:8989`
+    - API Key: from Sonarr UI (Settings → General → Security)
+  - Radarr should already be configured
 
 **Overseerr** (http://dev.local:5055):
 - Settings → Radarr
   - Update root folder to `/data/Movies`
+- Settings → Sonarr (if configured)
+  - Sonarr Server: `http://sonarr:8989`
+  - API Key: from Sonarr UI
+  - Root folder: `/data/Shows`

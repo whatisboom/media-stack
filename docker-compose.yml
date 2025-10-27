@@ -15,6 +15,8 @@ services:
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --ping=true
+      - --ping.entrypoint=traefik
     ports:
       - 80:80
       - 443:443
@@ -29,6 +31,12 @@ services:
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
       - "traefik.http.routers.dashboard.middlewares=auth"
       - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
     networks:
       - proxy
@@ -53,11 +61,18 @@ services:
       - VPN_TYPE=openvpn
       - OPENVPN_USER=${NORDVPN_USER}
       - OPENVPN_PASSWORD=${NORDVPN_PASSWORD}
-      - SERVER_COUNTRIES=${NORDVPN_COUNTRY:-United States}
+      - SERVER_HOSTNAMES=us5500.nordvpn.com
       - TZ=${TZ:-America/Chicago}
       - FIREWALL_OUTBOUND_SUBNETS=172.18.0.0/16  # Allow Docker network
       - HTTPPROXY=off
       - SHADOWSOCKS=off
+      - HEALTH_VPN_DURATION_INITIAL=30s
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   plex:
@@ -86,6 +101,12 @@ services:
       - "traefik.http.routers.plex.entrypoints=websecure"
       - "traefik.http.routers.plex.tls.certresolver=letsencrypt"
       - "traefik.http.services.plex.loadbalancer.server.port=32400"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:32400/web/index.html"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - proxy
     restart: unless-stopped
@@ -102,6 +123,32 @@ services:
       - /Volumes/Samsung_T5:/data
     ports:
       - 7878:7878
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7878/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ./configs/sonarr:/config
+      - /Volumes/Samsung_T5:/data
+    ports:
+      - 8989:8989
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8989/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   overseerr:
@@ -121,6 +168,12 @@ services:
       - "traefik.http.routers.overseerr.entrypoints=websecure"
       - "traefik.http.routers.overseerr.tls.certresolver=letsencrypt"
       - "traefik.http.services.overseerr.loadbalancer.server.port=5055"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5055/api/v1/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - proxy
     restart: unless-stopped
@@ -151,7 +204,34 @@ services:
       - ./configs/prowlarr:/config
     ports:
       - 9696:9696
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9696/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
+
+  health-monitor:
+    build: ./monitoring
+    container_name: health-monitor
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /Volumes/Samsung_T5:/data:ro
+      - ./logs:/logs
+    environment:
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - DISK_SPACE_THRESHOLD=${DISK_SPACE_THRESHOLD:-10}
+      - ALERT_COOLDOWN=${ALERT_COOLDOWN:-3600}
+    restart: unless-stopped
+    depends_on:
+      - traefik
+      - gluetun
+      - plex
+      - radarr
+      - sonarr
+      - prowlarr
+      - overseerr
 
 networks:
   proxy:

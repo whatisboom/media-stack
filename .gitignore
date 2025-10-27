@@ -14,7 +14,15 @@ configs/
 .docker/
 
 # Logs
+logs/
+!logs/.gitkeep
 *.log
+
+# Health monitor state
+logs/.health_state.json
+
+# Backups (contains configs and secrets)
+backups/
 
 # Temporary files
 *.tmp
