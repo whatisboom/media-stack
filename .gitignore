@@ -24,6 +24,9 @@ logs/.health_state.json
 # Backups (contains configs and secrets)
 backups/
 
+# Backup rclone config (contains R2 credentials)
+backup/rclone.conf
+
 # Temporary files
 *.tmp
 *.swp

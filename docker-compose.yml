@@ -233,6 +233,18 @@ services:
       - prowlarr
       - overseerr
 
+  backup:
+    build: ./backup
+    container_name: backup
+    profiles:
+      - tools
+    volumes:
+      - .:/workspace
+      - ./backup/rclone.conf:/root/.config/rclone/rclone.conf:ro
+    environment:
+      - REMOTE_BACKUP_PATH=${REMOTE_BACKUP_PATH}
+    working_dir: /workspace
+
 networks:
   proxy:
     name: proxy
