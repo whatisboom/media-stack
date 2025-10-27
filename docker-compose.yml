@@ -333,6 +333,8 @@ services:
       start_period: 30s
     networks:
       - proxy
+      - automation
+      - media
     restart: unless-stopped
 
   deluge:
