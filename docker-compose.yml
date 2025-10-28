@@ -432,9 +432,7 @@ services:
       - ./logs:/logs
     environment:
       - REMOTE_BACKUP_PATH=${REMOTE_BACKUP_PATH}
-      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 3 * * 1}
       - TZ=${TZ:-America/Chicago}
-      - RUN_ON_STARTUP=false
     deploy:
       resources:
         limits:
@@ -446,7 +444,9 @@ services:
     networks:
       - monitoring
     working_dir: /workspace
-    restart: unless-stopped
+    restart: "no"
+    profiles:
+      - tools
 
   recyclarr:
     build: ./recyclarr

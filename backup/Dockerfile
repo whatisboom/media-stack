@@ -6,18 +6,17 @@ RUN apk add --no-cache \
     tar \
     gzip \
     rclone \
-    dcron \
     tzdata
 
-# Copy backup script and entrypoint
+# Copy backup script
 COPY backup.sh /usr/local/bin/backup.sh
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
-# Make scripts executable
-RUN chmod +x /usr/local/bin/backup.sh /usr/local/bin/entrypoint.sh
+# Make script executable
+RUN chmod +x /usr/local/bin/backup.sh
 
 # Set working directory
 WORKDIR /workspace
 
-# Run entrypoint (starts cron daemon)
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# Run backup script directly
+ENTRYPOINT ["/usr/local/bin/backup.sh"]
+CMD ["--remote-sync"]
