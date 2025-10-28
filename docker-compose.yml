@@ -402,6 +402,8 @@ services:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - DISK_SPACE_THRESHOLD=${DISK_SPACE_THRESHOLD:-10}
       - ALERT_COOLDOWN=${ALERT_COOLDOWN:-3600}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
     deploy:
       resources:
         limits:
@@ -433,6 +435,8 @@ services:
     environment:
       - REMOTE_BACKUP_PATH=${REMOTE_BACKUP_PATH}
       - TZ=${TZ:-America/Chicago}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
     deploy:
       resources:
         limits:
@@ -449,15 +453,19 @@ services:
       - tools
 
   recyclarr:
-    build: ./recyclarr
+    image: ghcr.io/recyclarr/recyclarr:latest
     container_name: recyclarr
     profiles:
       - tools
     volumes:
-      - ./recyclarr:/config
+      - ./configs/recyclarr:/config
     environment:
       - RADARR_API_KEY=${RADARR_API_KEY}
       - SONARR_API_KEY=${SONARR_API_KEY}
+    working_dir: /config
+    command: sync
+    networks:
+      - automation
 
   watchtower:
     image: containrrr/watchtower:latest
@@ -465,13 +473,13 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      - WATCHTOWER_MONITOR_ONLY=true
+      - WATCHTOWER_MONITOR_ONLY=false
       - WATCHTOWER_NOTIFICATIONS=shoutrrr
       - WATCHTOWER_NOTIFICATION_URL=discord://${DISCORD_WEBHOOK_TOKEN}@${DISCORD_WEBHOOK_ID}
       - WATCHTOWER_SCHEDULE=0 0 4 * * *
       - WATCHTOWER_INCLUDE_RESTARTING=true
       - WATCHTOWER_INCLUDE_STOPPED=false
-      - WATCHTOWER_CLEANUP=false
+      - WATCHTOWER_CLEANUP=true
       - TZ=${TZ:-America/Chicago}
     deploy:
       resources:
