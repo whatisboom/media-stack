@@ -60,7 +60,7 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     ports:
-      - 127.0.0.1:8112:8112  # Deluge Web UI
+      - 8112:8112  # Deluge Web UI
       - 6881:6881  # Deluge incoming torrent connections
       - 6881:6881/udp
       - 127.0.0.1:58846:58846  # Deluge daemon
@@ -335,6 +335,7 @@ services:
       - proxy
       - automation
       - media
+      - download
     restart: unless-stopped
 
   deluge:
