@@ -61,10 +61,14 @@ mkdir -p "$BACKUP_DIR"
 # Create temporary exclude file
 EXCLUDE_FILE=$(mktemp)
 cat > "$EXCLUDE_FILE" <<'EOF'
-# Plex
+# Plex - exclude logs, cache, crash reports (keep databases for watch history)
 configs/plex/Library/Application Support/Plex Media Server/Logs/*
 configs/plex/Library/Application Support/Plex Media Server/Cache/*
 configs/plex/Library/Application Support/Plex Media Server/Crash Reports/*
+
+# Plex - exclude SQLite temporary files (WAL/SHM will be recreated)
+configs/plex/Library/Application Support/Plex Media Server/Plug-in Support/Databases/*.db-wal
+configs/plex/Library/Application Support/Plex Media Server/Plug-in Support/Databases/*.db-shm
 
 # Gluetun (7MB static file, easily re-downloaded)
 configs/gluetun/servers.json

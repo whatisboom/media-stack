@@ -401,35 +401,54 @@ This setup follows TRaSH Guides best practices:
 
 ### Automated Backup System
 
-**Container-Based Scheduling:**
-- Backup service runs continuously with built-in cron (dcron)
+**Container-Based Backup:**
+- Backup service is run-once container (manual execution)
+- Configured as Docker Compose profile: `--profile tools`
 - No host dependencies required (fully portable)
-- Schedule configured via `.env`: `BACKUP_SCHEDULE=0 3 * * 1` (Weekly Monday 3 AM)
-- Automatic retention: Keeps last 12 backups (~150MB total)
+- Automatic retention: Keeps last 12 backups (~80-100MB each)
+- Remote sync: Cloudflare R2 (r2:media-stack) with --remote-sync flag
 
 **What's Backed Up:**
 - Service configurations and databases (`configs/`)
+- **Plex databases** (watch history, library metadata ~1MB)
 - Environment variables (`.env`)
 - Infrastructure definition (`docker-compose.yml`)
 - Monitoring scripts (`monitoring/`)
 - Documentation files
 
 **What's NOT Backed Up:**
-- Media files (626GB) - Re-downloadable via Radarr/Sonarr
-- Plex watch history - Lost in drive failure
-- Plex logs and cache
+- Media files (re-downloadable via Radarr/Sonarr)
+- Plex logs, cache, and crash reports (excluded)
+- Plex SQLite temporary files (WAL/SHM)
 
 **Manual Backup:**
 ```bash
-# Run backup manually
+# Run backup manually (local only)
 ./backup/backup.sh
 
-# With remote sync
+# With remote sync to R2
 ./backup/backup.sh --remote-sync
 
-# Or via container
-docker compose exec backup /usr/local/bin/backup.sh
+# Or via Docker Compose
+docker compose --profile tools up backup
 ```
+
+**Plex Database Checkpoints:**
+For risky operations (batch imports, major changes), create safety checkpoints:
+```bash
+# Create checkpoint before risky operation
+./scripts/plex-checkpoint.sh create
+
+# List available checkpoints
+./scripts/plex-checkpoint.sh list
+
+# Restore from checkpoint (requires Plex stopped)
+docker compose stop plex
+./scripts/plex-checkpoint.sh restore 20251030_041500
+docker compose start plex
+```
+
+Checkpoints are lightweight (~6.5MB), keep last 7, and provide quick recovery from database corruption.
 
 **Remote Sync:**
 Configure in `.env` to automatically sync backups to cloud storage:
@@ -452,6 +471,50 @@ REMOTE_BACKUP_PATH=/Volumes/External/backups
 - Two scenarios covered: Drive re-mount (5 min) and complete drive failure (hours-days)
 - Service configs fully recoverable from backup
 - Media requires re-downloading (automated via Radarr/Sonarr)
+
+### Plex Database Protection
+
+**Problem:** Plex uses SQLite databases that can corrupt during rapid batch imports or concurrent write operations.
+
+**Prevention Strategies:**
+
+1. **Safe Batch Import Procedure** (for importing multiple movies/shows manually):
+   ```bash
+   # 1. Create checkpoint before import
+   ./scripts/plex-checkpoint.sh create
+
+   # 2. Import files via Radarr/Sonarr Manual Import
+   #    (Use Radarr UI → Library Import or Sonarr UI → Library Import)
+
+   # 3. Wait for all imports to complete
+
+   # 4. Verify no errors in Plex logs
+   docker compose logs plex --tail=50 | grep -i error
+
+   # 5. If corruption detected, restore checkpoint:
+   docker compose stop plex
+   ./scripts/plex-checkpoint.sh restore <timestamp>
+   docker compose start plex
+   ```
+
+2. **Rate Limiting** - When manually adding torrents for multiple movies:
+   - Add 1-2 at a time, wait for import to complete
+   - Avoid adding 4+ movies simultaneously
+   - Let Plex finish scanning before adding next batch
+
+3. **Database Monitoring:**
+   - Check logs periodically: `docker compose logs plex | grep -i "database\|corruption"`
+   - Database size: Should grow gradually, not jump suddenly
+   - Normal size: ~1-2MB per 100 movies
+
+**Recovery from Corruption:**
+1. Stop Plex: `docker compose stop plex`
+2. Restore from checkpoint: `./scripts/plex-checkpoint.sh restore <timestamp>`
+3. OR restore from stack backup: Extract Plex databases from backup tarball
+4. Start Plex: `docker compose start plex`
+5. Verify functionality, trigger manual library scan if needed
+
+**Root Cause:** SQLite WAL (Write-Ahead Logging) mode can fail to checkpoint during rapid concurrent writes. Plex scans trigger metadata writes for each file simultaneously.
 
 ## Security & Privacy
 
