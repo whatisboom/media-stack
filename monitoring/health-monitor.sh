@@ -426,7 +426,13 @@ fetch_github_changelog() {
 
     log "INFO" "Fetching changelog for GitHub repo: $org_repo"
 
-    local api_response=$(curl -sL "https://api.github.com/repos/$org_repo/releases?per_page=3" 2>/dev/null)
+    # Build curl command with optional GitHub token for increased rate limits
+    local curl_cmd="curl -sL"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        curl_cmd="$curl_cmd -H \"Authorization: token $GITHUB_TOKEN\""
+    fi
+
+    local api_response=$(eval "$curl_cmd \"https://api.github.com/repos/$org_repo/releases?per_page=3\"" 2>/dev/null)
 
     if [ -z "$api_response" ] || echo "$api_response" | jq -e 'type == "object" and .message' > /dev/null 2>&1; then
         log "WARN" "Failed to fetch GitHub releases for $org_repo"
