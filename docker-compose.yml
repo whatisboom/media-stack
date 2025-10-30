@@ -402,6 +402,7 @@ services:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - DISK_SPACE_THRESHOLD=${DISK_SPACE_THRESHOLD:-10}
       - ALERT_COOLDOWN=${ALERT_COOLDOWN:-3600}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
     deploy:
@@ -506,7 +507,12 @@ services:
       - TZ=${TZ:-America/Chicago}
     volumes:
       - ./configs/fail2ban:/config
-      - ./logs:/remotelogs:ro
+      - ./configs/radarr/logs:/remotelogs/radarr:ro
+      - ./configs/sonarr/logs:/remotelogs/sonarr:ro
+      - ./configs/prowlarr/logs:/remotelogs/prowlarr:ro
+      - ./configs/overseerr/logs:/remotelogs/overseerr:ro
+      - ./configs/plex/Library/Application Support/Plex Media Server/Logs:/remotelogs/plex:ro
+      - ./logs:/logs:ro
       - /var/log:/var/log:ro
     deploy:
       resources:

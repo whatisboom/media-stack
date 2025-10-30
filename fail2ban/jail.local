@@ -16,34 +16,34 @@ action = %(action_)s
 [radarr]
 enabled = true
 filter = radarr
-logpath = /remotelogs/radarr.log
+logpath = /remotelogs/radarr/radarr.txt
 port = 7878
 maxretry = 5
 
 [sonarr]
 enabled = true
 filter = sonarr
-logpath = /remotelogs/sonarr.log
+logpath = /remotelogs/sonarr/sonarr.txt
 port = 8989
 maxretry = 5
 
 [prowlarr]
 enabled = true
 filter = prowlarr
-logpath = /remotelogs/prowlarr.log
+logpath = /remotelogs/prowlarr/prowlarr.txt
 port = 9696
 maxretry = 5
 
 [overseerr]
 enabled = true
 filter = overseerr
-logpath = /remotelogs/overseerr.log
+logpath = /remotelogs/overseerr/overseerr-*.log
 port = 5055
 maxretry = 5
 
 [plex]
-enabled = true
+enabled = false
 filter = plex
-logpath = /var/log/plex.log
+logpath = /remotelogs/plex/Plex Media Server.log
 port = 32400
 maxretry = 5

@@ -34,13 +34,19 @@ The fail2ban container:
 
 ## First-Time Setup
 
-On first run, the linuxserver fail2ban container creates default configs in `./configs/fail2ban/`.
+On first run, the linuxserver fail2ban container creates default configs in `./configs/fail2ban/fail2ban/`.
 
-Copy custom configurations:
+Deploy custom configurations using the setup script:
+```bash
+# Run automated setup script
+./scripts/setup-fail2ban.sh
+```
+
+Or manually:
 ```bash
 # After first container start
-cp ./fail2ban/jail.local ./configs/fail2ban/jail.local
-cp ./fail2ban/filters/* ./configs/fail2ban/filter.d/
+cp ./fail2ban/jail.local ./configs/fail2ban/fail2ban/jail.local
+cp ./fail2ban/filters/* ./configs/fail2ban/fail2ban/filter.d/
 
 # Restart to apply
 docker compose restart fail2ban
