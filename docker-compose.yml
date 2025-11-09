@@ -68,15 +68,14 @@ services:
       - ./configs/gluetun:/gluetun
     environment:
       - VPN_SERVICE_PROVIDER=nordvpn
-      - VPN_TYPE=openvpn
-      - OPENVPN_USER=${NORDVPN_USER}
-      - OPENVPN_PASSWORD=${NORDVPN_PASSWORD}
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${NORDVPN_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${NORDVPN_ADDRESSES}
       - SERVER_HOSTNAMES=us5500.nordvpn.com
       - TZ=${TZ:-America/Chicago}
       - FIREWALL_OUTBOUND_SUBNETS=172.18.0.0/16  # Allow Docker network
       - HTTPPROXY=off
       - SHADOWSOCKS=off
-      - HEALTH_VPN_DURATION_INITIAL=30s
     deploy:
       resources:
         limits:
@@ -90,7 +89,7 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 10s
     networks:
       - download
       - automation
