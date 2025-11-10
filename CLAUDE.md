@@ -32,7 +32,7 @@ Overseerr (Requests)
                                      ↓
                        Deluge (Download Client) ──→ Gluetun (VPN Container)
                                      ↓                       ↓
-                            Plex (Media Streaming)    NordVPN (OpenVPN)
+                            Plex (Media Streaming)    NordVPN (Wireguard)
                                      ↓
                             Tautulli (Plex Monitoring)
 ```
@@ -535,23 +535,35 @@ REMOTE_BACKUP_PATH=/Volumes/External/backups
 - 6881 (TCP/UDP) exposed for incoming connections
 
 ### VPN Status
-**✅ CONFIGURED:** Gluetun VPN container with NordVPN
+**✅ CONFIGURED:** Gluetun VPN container with NordVPN Wireguard (NordLynx)
 - All Deluge traffic routes through VPN tunnel
 - Kill switch enabled (network_mode prevents IP leaks)
-- VPN credentials in `.env` (NORDVPN_USER, NORDVPN_PASSWORD)
+- VPN credentials in `.env` (NORDVPN_PRIVATE_KEY, NORDVPN_ADDRESSES)
 - Current server: us5500.nordvpn.com (hardcoded in docker-compose.yml)
-- **Note:** Using specific server instead of country-based auto-selection due to NordVPN auth reliability issues
+- **Protocol:** Wireguard (4x faster than OpenVPN, more reliable)
+
+**Getting Wireguard Credentials:**
+1. Generate NordVPN access token: https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/
+2. Get your private key via API:
+```bash
+curl -s -u token:YOUR_ACCESS_TOKEN https://api.nordvpn.com/v1/users/services/credentials | grep -o '"nordlynx_private_key":"[^"]*"' | cut -d'"' -f4
+```
+3. Add to `.env`:
+```bash
+NORDVPN_PRIVATE_KEY=<paste_private_key_from_step_2>
+NORDVPN_ADDRESSES=10.5.0.2/32  # Standard for all NordVPN Wireguard
+```
 
 **Checking VPN Connection:**
 ```bash
-# View gluetun logs to see VPN status
+# View gluetun logs to see VPN status (should see "Wireguard" not "OpenVPN")
 docker compose logs gluetun --tail=50
 
 # Check Deluge's public IP (should be VPN IP, not your real IP)
 docker exec gluetun wget -qO- ifconfig.me
 
-# Verify VPN is connected (should see "Initialization Sequence Completed")
-docker compose logs gluetun | grep -i "initialized\|completed"
+# Verify Wireguard connection (should see "Wireguard setup is complete")
+docker compose logs gluetun | grep -i "wireguard"
 ```
 
 **Changing VPN Server:**

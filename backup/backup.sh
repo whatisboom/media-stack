@@ -206,3 +206,6 @@ echo "  tar xzf $BACKUP_PATH"
 echo ""
 echo "For disaster recovery instructions, see:"
 echo "  DISASTER_RECOVERY.md"
+
+# Create healthcheck marker file for Docker
+touch /logs/.last_backup_success

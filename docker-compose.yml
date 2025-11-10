@@ -50,6 +50,11 @@ services:
       - media
       - automation
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # VPN container - routes Deluge traffic through NordVPN
   gluetun:
@@ -73,7 +78,7 @@ services:
       - WIREGUARD_ADDRESSES=${NORDVPN_ADDRESSES}
       - SERVER_HOSTNAMES=us5500.nordvpn.com
       - TZ=${TZ:-America/Chicago}
-      - FIREWALL_OUTBOUND_SUBNETS=172.18.0.0/16  # Allow Docker network
+      - FIREWALL_OUTBOUND_SUBNETS=172.16.0.0/12  # Allow all Docker bridge networks
       - HTTPPROXY=off
       - SHADOWSOCKS=off
     deploy:
@@ -94,6 +99,11 @@ services:
       - download
       - automation
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   plex:
     image: plexinc/pms-docker
@@ -139,6 +149,11 @@ services:
       - proxy
       - media
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   tautulli:
     image: lscr.io/linuxserver/tautulli:latest
@@ -169,6 +184,11 @@ services:
     networks:
       - media
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   radarr:
     image: lscr.io/linuxserver/radarr:latest
@@ -200,6 +220,11 @@ services:
       - automation
       - download
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
@@ -231,6 +256,11 @@ services:
       - automation
       - download
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
@@ -261,6 +291,11 @@ services:
     networks:
       - automation
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   overseerr:
     image: sctx/overseerr:latest
@@ -298,6 +333,11 @@ services:
       - automation
       - media
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   homarr:
     image: ghcr.io/ajnart/homarr:latest
@@ -333,9 +373,12 @@ services:
     networks:
       - proxy
       - automation
-      - media
-      - download
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   deluge:
     image: lscr.io/linuxserver/deluge:latest
@@ -366,6 +409,11 @@ services:
     depends_on:
       - gluetun
     restart: on-failure:5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
@@ -395,6 +443,11 @@ services:
     networks:
       - automation
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   health-monitor:
     build: ./monitoring
@@ -418,9 +471,20 @@ services:
         reservations:
           cpus: '0.1'
           memory: 64M
+    healthcheck:
+      test: ["CMD", "test", "-f", "/logs/.health_monitor_running"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - monitoring
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       - traefik
       - gluetun
@@ -451,10 +515,21 @@ services:
         reservations:
           cpus: '0.1'
           memory: 64M
+    healthcheck:
+      test: ["CMD", "test", "-f", "/logs/.last_backup_success"]
+      interval: 24h
+      timeout: 10s
+      retries: 1
+      start_period: 10s
     networks:
       - monitoring
     working_dir: /workspace
     restart: "no"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     profiles:
       - tools
 
@@ -472,6 +547,11 @@ services:
     command: sync
     networks:
       - automation
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   watchtower:
     image: containrrr/watchtower:latest
@@ -498,6 +578,11 @@ services:
     networks:
       - monitoring
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   fail2ban:
     image: lscr.io/linuxserver/fail2ban:latest
@@ -528,6 +613,11 @@ services:
           cpus: '0.1'
           memory: 64M
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   proxy:
