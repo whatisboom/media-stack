@@ -514,6 +514,7 @@ services:
     environment:
       - REMOTE_BACKUP_PATH=${REMOTE_BACKUP_PATH}
       - TZ=${TZ:-America/Chicago}
+      - BACKUP_SCHEDULE=weekly
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
     deploy:
@@ -525,7 +526,7 @@ services:
           cpus: '0.1'
           memory: 64M
     healthcheck:
-      test: ["CMD", "test", "-f", "/logs/.last_backup_success"]
+      test: ["CMD", "sh", "-c", "test -f /logs/.last_backup_success && test $(find /logs/.last_backup_success -mtime -8 | wc -l) -gt 0"]
       interval: 24h
       timeout: 10s
       retries: 1
@@ -533,14 +534,12 @@ services:
     networks:
       - monitoring
     working_dir: /workspace
-    restart: "no"
+    restart: unless-stopped
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    profiles:
-      - tools
 
   recyclarr:
     image: ghcr.io/recyclarr/recyclarr:latest
