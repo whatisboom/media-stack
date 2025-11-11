@@ -29,8 +29,15 @@ services:
       - "traefik.http.routers.dashboard.service=api@internal"
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.dashboard.middlewares=auth"
+      - "traefik.http.routers.dashboard.middlewares=auth,rate-limit-app"
       - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+      # Rate limiting middleware definitions
+      - "traefik.http.middlewares.rate-limit-plex.ratelimit.average=100"
+      - "traefik.http.middlewares.rate-limit-plex.ratelimit.burst=50"
+      - "traefik.http.middlewares.rate-limit-plex.ratelimit.period=1m"
+      - "traefik.http.middlewares.rate-limit-app.ratelimit.average=30"
+      - "traefik.http.middlewares.rate-limit-app.ratelimit.burst=15"
+      - "traefik.http.middlewares.rate-limit-app.ratelimit.period=1m"
     deploy:
       resources:
         limits:
@@ -130,6 +137,7 @@ services:
       - "traefik.http.routers.plex.rule=Host(`plex.${DOMAIN}`)"
       - "traefik.http.routers.plex.entrypoints=websecure"
       - "traefik.http.routers.plex.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.plex.middlewares=rate-limit-plex"
       - "traefik.http.services.plex.loadbalancer.server.port=32400"
     deploy:
       resources:
@@ -313,6 +321,7 @@ services:
       - "traefik.http.routers.overseerr.rule=Host(`requests.${DOMAIN}`)"
       - "traefik.http.routers.overseerr.entrypoints=websecure"
       - "traefik.http.routers.overseerr.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.overseerr.middlewares=rate-limit-app"
       - "traefik.http.services.overseerr.loadbalancer.server.port=5055"
     deploy:
       resources:
