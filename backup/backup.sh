@@ -51,6 +51,36 @@ if [ -f .env ]; then
     set +a
 fi
 
+# Discord notification helper
+send_discord_notification() {
+    local status=$1
+    local message=$2
+    local color=$3
+
+    if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+        return 0
+    fi
+
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local hostname=$(hostname)
+
+    curl -X POST "${DISCORD_WEBHOOK_URL}" \
+        -H "Content-Type: application/json" \
+        -d @- <<EOF
+{
+    "embeds": [{
+        "title": "📦 Backup ${status}",
+        "description": "${message}",
+        "color": ${color},
+        "timestamp": "${timestamp}",
+        "footer": {
+            "text": "Host: ${hostname}"
+        }
+    }]
+}
+EOF
+}
+
 echo -e "${GREEN}=== Media Stack Backup ===${NC}"
 echo "Backup timestamp: ${TIMESTAMP}"
 echo ""
@@ -114,12 +144,83 @@ tar czf "$BACKUP_PATH" \
 # Clean up exclude file
 rm -f "$EXCLUDE_FILE"
 
+# Validate backup contents
+validate_backup() {
+    local backup_file=$1
+    echo -e "${YELLOW}Validating backup contents...${NC}"
+
+    # Critical files that must exist
+    local critical_files=(
+        "configs/radarr/config.xml"
+        "configs/sonarr/config.xml"
+        "configs/prowlarr/config.xml"
+        "configs/overseerr/settings.json"
+        "configs/plex/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
+        ".env"
+        "docker-compose.yml"
+    )
+
+    local missing_files=()
+
+    for file in "${critical_files[@]}"; do
+        if ! tar tzf "$backup_file" "$file" >/dev/null 2>&1; then
+            missing_files+=("$file")
+        fi
+    done
+
+    if [ ${#missing_files[@]} -gt 0 ]; then
+        echo -e "${RED}  ✗ Backup validation failed!${NC}"
+        echo -e "${RED}    Missing critical files:${NC}"
+        for file in "${missing_files[@]}"; do
+            echo -e "${RED}      - $file${NC}"
+        done
+
+        # Send Discord alert if webhook configured
+        if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
+            send_discord_notification "Validation Failed" \
+                "Backup is missing critical files:\\n$(printf '• %s\\n' "${missing_files[@]}")" \
+                15158332  # Red
+        fi
+
+        return 1
+    fi
+
+    # Verify API keys exist in configs (basic grep check)
+    echo -e "${YELLOW}  Checking API keys...${NC}"
+    local api_checks=(
+        "configs/radarr/config.xml:<ApiKey>"
+        "configs/sonarr/config.xml:<ApiKey>"
+        "configs/prowlarr/config.xml:<ApiKey>"
+    )
+
+    for check in "${api_checks[@]}"; do
+        local file="${check%%:*}"
+        local pattern="${check##*:}"
+
+        if ! tar xzf "$backup_file" "$file" -O 2>/dev/null | grep -q "$pattern"; then
+            echo -e "${YELLOW}    Warning: $file may not contain API key${NC}"
+        fi
+    done
+
+    echo -e "${GREEN}  ✓ Backup validation passed${NC}"
+    return 0
+}
+
 # Verify backup
 echo -e "${YELLOW}Verifying backup integrity...${NC}"
 if tar tzf "$BACKUP_PATH" > /dev/null 2>&1; then
     echo -e "${GREEN}  ✓ Backup integrity verified${NC}"
+
+    # Add validation
+    if ! validate_backup "$BACKUP_PATH"; then
+        echo -e "${RED}Backup validation failed - review missing files${NC}"
+        exit 1
+    fi
 else
     echo -e "${RED}  ✗ Backup verification failed!${NC}"
+    send_discord_notification "Failed" \
+        "Backup verification failed!\\n**Path:** ${BACKUP_PATH}" \
+        15158332  # Red
     exit 1
 fi
 
@@ -130,6 +231,18 @@ echo -e "${GREEN}Backup created successfully!${NC}"
 echo "  Location: $BACKUP_PATH"
 echo "  Size: $BACKUP_SIZE"
 echo ""
+
+# Send success notification
+send_discord_notification "Successful" \
+    "Backup created successfully\\n**Size:** ${BACKUP_SIZE}\\n**Location:** ${BACKUP_PATH}" \
+    3066993  # Green
+
+# Check backup size and warn if exceeding threshold
+if [ "${BACKUP_SIZE//[!0-9]/}" -gt 200 ]; then  # Strip units, check if >200MB
+    send_discord_notification "Warning" \
+        "Backup size exceeds 200MB threshold\\n**Size:** ${BACKUP_SIZE}\\n**Review excludes or cleanup configs**" \
+        16776960  # Yellow
+fi
 
 # Apply retention policy
 echo -e "${YELLOW}Applying retention policy (keep last ${RETENTION_COUNT} backups)...${NC}"
@@ -168,6 +281,9 @@ if [ "$REMOTE_SYNC" -eq 1 ]; then
             if command -v rclone &> /dev/null; then
                 rclone copy "$BACKUP_PATH" "$REMOTE_BACKUP_PATH/"
                 echo -e "${GREEN}  ✓ Synced via rclone${NC}"
+                send_discord_notification "Synced" \
+                    "Backup synced to remote location\\n**Remote:** ${REMOTE_BACKUP_PATH}" \
+                    3447003  # Blue
             else
                 echo -e "${RED}  ✗ rclone not installed${NC}"
                 echo -e "${YELLOW}  Install: brew install rclone (macOS) or see https://rclone.org${NC}"
@@ -177,6 +293,9 @@ if [ "$REMOTE_SYNC" -eq 1 ]; then
             if command -v aws &> /dev/null; then
                 aws s3 cp "$BACKUP_PATH" "$REMOTE_BACKUP_PATH/"
                 echo -e "${GREEN}  ✓ Synced to S3${NC}"
+                send_discord_notification "Synced" \
+                    "Backup synced to remote location\\n**Remote:** ${REMOTE_BACKUP_PATH}" \
+                    3447003  # Blue
             else
                 echo -e "${RED}  ✗ AWS CLI not installed${NC}"
             fi
@@ -185,6 +304,9 @@ if [ "$REMOTE_SYNC" -eq 1 ]; then
             if command -v rsync &> /dev/null; then
                 rsync -avz "$BACKUP_PATH" "$REMOTE_BACKUP_PATH/"
                 echo -e "${GREEN}  ✓ Synced via rsync${NC}"
+                send_discord_notification "Synced" \
+                    "Backup synced to remote location\\n**Remote:** ${REMOTE_BACKUP_PATH}" \
+                    3447003  # Blue
             else
                 echo -e "${RED}  ✗ rsync not installed${NC}"
             fi
@@ -193,6 +315,9 @@ if [ "$REMOTE_SYNC" -eq 1 ]; then
             mkdir -p "$REMOTE_BACKUP_PATH"
             cp "$BACKUP_PATH" "$REMOTE_BACKUP_PATH/"
             echo -e "${GREEN}  ✓ Copied to remote path${NC}"
+            send_discord_notification "Synced" \
+                "Backup synced to remote location\\n**Remote:** ${REMOTE_BACKUP_PATH}" \
+                3447003  # Blue
         fi
         echo ""
     fi
