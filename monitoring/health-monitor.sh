@@ -477,6 +477,35 @@ get_remote_image_digest() {
     docker manifest inspect "$image" 2>/dev/null | jq -r '.config.digest // .manifests[0].digest' 2>/dev/null | cut -c1-19 || echo ""
 }
 
+# Check for VPN IP leaks
+check_vpn_leak() {
+    # Get VPN's public IP (from gluetun container)
+    local vpn_ip=$(docker exec gluetun wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
+
+    # Get Deluge's public IP (should be same as VPN)
+    # Note: Deluge shares gluetun's network, so both should report same IP
+    local deluge_ip=$(docker exec gluetun wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
+
+    if [ "$vpn_ip" = "unavailable" ] || [ "$deluge_ip" = "unavailable" ]; then
+        log "WARN" "VPN IP check failed - could not retrieve IPs"
+        return 0
+    fi
+
+    # Compare IPs (they should be identical since Deluge uses gluetun's network)
+    if [ "$vpn_ip" != "$deluge_ip" ]; then
+        send_alert "VPN IP Leak Detected" \
+            "⚠️ **VPN IP:** $vpn_ip\\n⚠️ **Deluge IP:** $deluge_ip\\n\\nImmediate action required!" \
+            "critical" \
+            "vpn_leak"
+
+        log "ERROR" "VPN IP leak detected! VPN: $vpn_ip, Deluge: $deluge_ip"
+        return 1
+    fi
+
+    log "INFO" "VPN IP check passed (IP: $vpn_ip)"
+    return 0
+}
+
 # Check for image updates
 check_image_updates() {
     log "INFO" "Checking for Docker image updates..."
@@ -680,6 +709,11 @@ main() {
     fi
 
     if ! check_vpn; then
+        check_failed=1
+    fi
+
+    # Check for VPN IP leaks (runs every execution)
+    if ! check_vpn_leak; then
         check_failed=1
     fi
 
