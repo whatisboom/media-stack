@@ -60,6 +60,17 @@ Overseerr (Requests)
 4. Subtitles saved alongside media files in `/data/Movies` or `/data/Shows`
 5. Plex automatically detects and uses subtitles
 
+**Compression & Storage Management Flow:**
+1. Radarr/Sonarr remove torrents from Deluge after seeding goals met (72h OR 2.0 ratio)
+2. Files remain in `/data/Downloads` after torrent removal
+3. Compressor service runs daily (3 AM) to find orphaned video files
+4. For each file in Downloads, compressor finds matching file in Movies/Shows
+5. Compressor encodes to HEVC (x265) with CRF 23 for 40-50% size reduction
+6. Atomically replaces original file in media library (preserves Plex metadata)
+7. Deletes original from `/data/Downloads`
+8. Triggers Plex library scan
+9. Sends Discord notification with space saved
+
 ### Volume Architecture
 
 **Critical: TRaSH Guides Compliant Unified Mount**
@@ -92,6 +103,7 @@ The stack uses isolated Docker networks to limit lateral movement and enforce se
 2. **media** - Media consumption
    - Plex (media server)
    - Tautulli (monitoring)
+   - Compressor (storage optimization, needs Plex API access)
 
 3. **automation** - Media management (*arr stack)
    - Radarr (movies)
@@ -197,6 +209,14 @@ docker exec gluetun wget -qO- http://ipinfo.io/country
 # Check Traefik status and certificate generation
 docker compose logs traefik --tail=50
 docker compose logs traefik | grep -i "certificate"
+
+# Run media compression manually
+./scripts/compress-media.sh                # Run compression now
+./scripts/compress-media.sh --dry-run      # Test without making changes
+
+# Check compression logs
+docker compose logs compressor --tail=50
+tail -f logs/compressor.log
 ```
 
 ## Configuration Management
@@ -223,6 +243,10 @@ docker compose logs traefik | grep -i "certificate"
 - Naming scheme (TRaSH Guides compliant)
 - Download client settings
 - Indexer connections (synced from Prowlarr)
+- **Seeding goals** (Settings → Indexers → [Indexer]):
+  - Seed Ratio: 2.0 (exceeds TorrentDay minimum)
+  - Seed Time: 4320 minutes (72 hours)
+  - Enables automatic torrent removal after goals met
 
 **Sonarr** (`configs/sonarr/config.xml`):
 - Quality profiles
@@ -230,6 +254,10 @@ docker compose logs traefik | grep -i "certificate"
 - Download client settings
 - Indexer connections (synced from Prowlarr)
 - Series type settings (Standard, Daily, Anime)
+- **Seeding goals** (Settings → Indexers → [Indexer]):
+  - Seed Ratio: 2.0
+  - Seed Time: 4320 minutes (72 hours)
+  - Works with Completed Download Handling to remove torrents
 
 **Bazarr** (`configs/bazarr/config/config.ini`):
 - Radarr and Sonarr connection settings
@@ -273,6 +301,16 @@ docker compose logs traefik | grep -i "certificate"
 - User and library settings
 - Watch history and statistics database
 - Optional Plex logs path for LogViewer feature
+
+**Compressor** (`.env` configuration):
+- **COMPRESSION_CRF**: Quality setting (23 = visually lossless, 28 = aggressive)
+- **COMPRESSION_PRESET**: Encoding speed (slow = better compression, fast = quicker)
+- **COMPRESSION_SCHEDULE**: Cron schedule (default: `0 3 * * *` = 3 AM daily)
+- **MIN_COMPRESSION_RATIO**: Only keep compressed if <80% original size
+- **DRY_RUN**: Set to `true` to test without making changes
+- Automatically compresses video files after torrent removal
+- Uses HEVC (x265) codec for 40-50% space savings
+- Preserves Plex metadata and watch history
 
 ## TRaSH Guides Compliance
 
@@ -379,6 +417,36 @@ This setup follows TRaSH Guides best practices:
 - Verify Bazarr has write permissions to media directories
 - Check minimum score threshold in subtitle settings
 - Review logs: `docker compose logs -f bazarr`
+
+### Torrents Not Being Removed After Seeding
+- Verify per-indexer seeding goals configured in Radarr/Sonarr (Settings → Indexers → [Indexer])
+- Check "Remove" enabled in Completed Download Handling (Settings → Download Clients)
+- Verify Deluge config has `"remove_seed_at_ratio": true` in `configs/deluge/core.conf`
+- Check Radarr/Sonarr logs: `docker compose logs radarr | grep -i "remov"`
+- Manually test: Add a movie, wait for it to seed, verify torrent removed
+
+### Compressor Not Running or Finding Files
+- Check if compressor is running: `docker compose ps compressor`
+- Verify scheduled time in .env: `COMPRESSION_SCHEDULE=0 3 * * *`
+- Check logs: `docker compose logs compressor` or `tail -f logs/compressor.log`
+- Verify files exist in `/data/Downloads` with no active torrent
+- Test manually: `./scripts/compress-media.sh --dry-run`
+- Check Discord webhook configured: `DISCORD_WEBHOOK_URL` in .env
+
+### Compression Failed or Poor Quality
+- Check ffmpeg errors in logs: `docker compose logs compressor`
+- Verify sufficient disk space for temporary files (needs 2x file size free)
+- Adjust CRF for quality: Lower = better quality (23-28 recommended)
+- Change preset for speed: `fast` encodes quicker, `slow` compresses better
+- Test single file: Run manually with `--dry-run` first
+- Verify compressed file plays: Open in Plex before deletion confirmed
+
+### Plex Not Detecting Compressed Files
+- Verify Plex running: `docker compose ps plex`
+- Manually trigger scan: Plex UI → Library → Scan Library Files
+- Check Plex logs: `docker compose logs plex | grep -i scan`
+- Verify file permissions: Compressor should preserve ownership
+- Check watch history: Should be preserved if filename unchanged
 
 ## Access URLs
 
@@ -618,6 +686,40 @@ After changing volume mounts, update paths in service UIs:
     - Sonarr Server: `http://sonarr:8989`
     - API Key: from Sonarr UI (Settings → General → Security)
   - Radarr should already be configured
+
+### Required Seeding Goals Configuration
+
+**CRITICAL:** These settings enable automatic torrent removal after seeding requirements are met.
+
+**Option 1: Configure in Radarr/Sonarr (Recommended if not using Prowlarr Full Sync)**
+
+**Radarr** (http://dev.local:7878):
+- Settings → Indexers → [Click your TorrentDay indexer]
+  - **Seed Ratio**: `2.0` (exceeds TorrentDay minimum of 1.0)
+  - **Seed Time**: `4320` (72 hours in minutes)
+
+**Sonarr** (http://dev.local:8989):
+- Settings → Indexers → **Click "Show Advanced" button at the top** (Required!)
+  - [Click your TorrentDay indexer]
+  - **Seed Ratio**: `2.0`
+  - **Seed Time**: `4320` (72 hours in minutes)
+  - Note: These are Advanced options, hidden by default
+
+**IMPORTANT: Prowlarr Sync Mode Consideration**
+
+⚠️ **Prowlarr does NOT have seed ratio/time settings.** If you use Prowlarr's "Full Sync" mode, it may overwrite seed goals configured in Radarr/Sonarr.
+
+**Recommended Solution:**
+Change Prowlarr sync mode to **"Add and Remove Only"**:
+- Prowlarr → Settings → Apps → [Edit Radarr/Sonarr connections]
+- Change **Sync Level** from `Full Sync` to `Add and Remove Only`
+- This allows you to configure seed goals in Radarr/Sonarr without them being overwritten
+
+**Enable Completed Download Handling:**
+
+Both Radarr and Sonarr need this enabled to actually remove torrents:
+- **Radarr**: Settings → Download Clients → Completed Download Handling → Enable "Remove" checkbox
+- **Sonarr**: Settings → Download Clients → Completed Download Handling → Enable "Remove" checkbox
 
 **Overseerr** (http://dev.local:5055):
 - Settings → Radarr

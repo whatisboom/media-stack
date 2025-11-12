@@ -35,8 +35,8 @@ services:
       - "traefik.http.middlewares.rate-limit-plex.ratelimit.average=100"
       - "traefik.http.middlewares.rate-limit-plex.ratelimit.burst=50"
       - "traefik.http.middlewares.rate-limit-plex.ratelimit.period=1m"
-      - "traefik.http.middlewares.rate-limit-app.ratelimit.average=30"
-      - "traefik.http.middlewares.rate-limit-app.ratelimit.burst=15"
+      - "traefik.http.middlewares.rate-limit-app.ratelimit.average=500"
+      - "traefik.http.middlewares.rate-limit-app.ratelimit.burst=100"
       - "traefik.http.middlewares.rate-limit-app.ratelimit.period=1m"
     deploy:
       resources:
@@ -534,6 +534,50 @@ services:
     networks:
       - monitoring
     working_dir: /workspace
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  compressor:
+    build: ./compressor
+    container_name: compressor
+    volumes:
+      - /Volumes/Samsung_T5:/data
+      - ./logs:/logs
+    environment:
+      - DOWNLOADS_DIR=/data/Downloads
+      - MOVIES_DIR=/data/Movies
+      - SHOWS_DIR=/data/Shows
+      - COMPRESSION_CRF=${COMPRESSION_CRF:-23}
+      - COMPRESSION_PRESET=${COMPRESSION_PRESET:-slow}
+      - COMPRESSION_SCHEDULE=${COMPRESSION_SCHEDULE:-0 3 * * *}
+      - DRY_RUN=${DRY_RUN:-false}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - PLEX_URL=http://plex:32400
+      - PLEX_CLAIM=${PLEX_CLAIM}
+      - MIN_COMPRESSION_RATIO=${MIN_COMPRESSION_RATIO:-0.8}
+      - TZ=${TZ:-America/Chicago}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -f /logs/compressor.log"]
+      interval: 24h
+      timeout: 10s
+      retries: 1
+      start_period: 1m
+    networks:
+      - media
     restart: unless-stopped
     logging:
       driver: "json-file"

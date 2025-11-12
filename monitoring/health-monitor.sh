@@ -334,7 +334,7 @@ check_disk_space() {
     fi
 
     # Get available space in GB
-    local available_space=$(df -k "$media_disk" | tail -1 | awk '{printf "%.0f", $4/1024/1024}')
+    local available_space=$(df -P -k "$media_disk" | tail -1 | awk '{printf "%.0f", $4/1024/1024}')
 
     log "INFO" "Available disk space: ${available_space}GB"
 
