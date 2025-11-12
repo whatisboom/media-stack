@@ -306,7 +306,7 @@ services:
         max-file: "3"
 
   overseerr:
-    image: sctx/overseerr:latest
+    image: sctx/overseerr:develop
     container_name: overseerr
     environment:
       - LOG_LEVEL=debug
