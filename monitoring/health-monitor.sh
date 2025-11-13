@@ -301,12 +301,28 @@ check_vpn() {
         return 1
     fi
 
-    # Get public IP from gluetun
-    local vpn_ip=$(docker exec gluetun wget -qO- https://api.ipify.org 2>/dev/null || echo "")
+    # Get public IP from gluetun with retries (DNS-over-TLS can be flaky)
+    local vpn_ip=""
+    local max_retries=3
+    local retry_delay=2
+
+    for attempt in $(seq 1 $max_retries); do
+        log "INFO" "VPN IP check attempt $attempt/$max_retries"
+        vpn_ip=$(docker exec gluetun wget -qO- https://api.ipify.org 2>/dev/null || echo "")
+
+        if [ -n "$vpn_ip" ]; then
+            break
+        fi
+
+        if [ $attempt -lt $max_retries ]; then
+            log "WARN" "VPN IP check failed, retrying in ${retry_delay}s..."
+            sleep $retry_delay
+        fi
+    done
 
     if [ -z "$vpn_ip" ]; then
-        log "ERROR" "Failed to get VPN public IP"
-        send_alert "[ALERT] Media Stack: VPN Connectivity Issue" "Unable to determine VPN public IP. The VPN connection may be down." "$COLOR_FAILURE" "failure"
+        log "ERROR" "Failed to get VPN public IP after $max_retries attempts"
+        send_alert "[ALERT] Media Stack: VPN Connectivity Issue" "Unable to determine VPN public IP after $max_retries attempts. The VPN connection may be down or DNS is failing." "$COLOR_FAILURE" "failure"
         return 1
     fi
 
