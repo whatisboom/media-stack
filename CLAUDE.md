@@ -448,6 +448,15 @@ This setup follows TRaSH Guides best practices:
 - Verify file permissions: Compressor should preserve ownership
 - Check watch history: Should be preserved if filename unchanged
 
+### VPN Connectivity Alerts (False Positives)
+- Symptom: Discord alerts "Unable to determine VPN public IP" but VPN is working
+- Cause: Gluetun uses DNS-over-TLS (port 853) which can timeout through VPN
+- Check gluetun logs: `docker compose logs gluetun | grep -i "dns\|timeout"`
+- Verify VPN working: `docker exec gluetun wget -qO- https://api.ipify.org`
+- Health monitor now retries 3 times before alerting (as of commit eb65747)
+- If alerts persist: Consider switching gluetun to plain DNS (see docker-compose.yml DNS_UPSTREAM_RESOLVER_TYPE)
+- Gluetun container may show as "unhealthy" during DNS timeouts but VPN tunnel still works
+
 ## Access URLs
 
 **Internal Access** (local network):
