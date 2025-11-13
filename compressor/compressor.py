@@ -93,6 +93,25 @@ def get_file_size_gb(file_path: Path) -> float:
     return file_path.stat().st_size / (1024 ** 3)
 
 
+def get_video_codec(file_path: Path) -> Optional[str]:
+    """Get video codec name using ffprobe."""
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=codec_name',
+             '-of', 'default=noprint_wrappers=1:nokey=1', str(file_path)],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0:
+            return result.stdout.strip().lower()
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get codec for: {file_path} - {e}")
+        return None
+
+
 def verify_video_playable(file_path: Path) -> bool:
     """Verify video file is playable using ffprobe."""
     try:
@@ -175,6 +194,13 @@ def process_file(downloads_file: Path) -> Dict:
 
     logger.info(f"Found match: {downloads_file.name} -> {media_file}")
     logger.info(f"Original size: {original_size:.2f} GB")
+
+    # Check if already HEVC-encoded (skip re-encoding for minimal gains)
+    video_codec = get_video_codec(media_file)
+    if video_codec in ('hevc', 'h265'):
+        logger.info(f"Skipping already HEVC-encoded file (codec: {video_codec}): {media_file.name}")
+        stats['error'] = f'Already HEVC ({video_codec})'
+        return stats
 
     # Create temporary compressed file (preserve extension for ffmpeg)
     temp_output = media_file.parent / f".{media_file.stem}.tmp{media_file.suffix}"
