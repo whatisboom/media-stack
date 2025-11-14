@@ -687,7 +687,7 @@ send_update_notification() {
     fields="$fields]"
 
     # Create Discord embed JSON
-    local footer_text="Watchtower will auto-update these services at 4:00 AM"
+    local footer_text="Updates detected by Watchtower (monitor-only mode)"
     local discord_payload=$(cat <<EOF
 {
   "username": "Media Stack Monitor",
