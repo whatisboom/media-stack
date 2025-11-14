@@ -199,13 +199,28 @@ EOF
 check_docker_health() {
     log "INFO" "Checking Docker service health..."
 
+    # Map service names to actual container names
+    declare -A container_names=(
+        ["traefik"]="traefik-reverse-proxy"
+        ["gluetun"]="gluetun-vpn"
+        ["plex"]="plex-media-server"
+        ["radarr"]="radarr-movie-management"
+        ["sonarr"]="sonarr-tv-management"
+        ["prowlarr"]="prowlarr-indexer-manager"
+        ["overseerr"]="overseerr-request-manager"
+        ["homarr"]="homarr-dashboard"
+        ["deluge"]="deluge-torrent-client"
+        ["fail2ban"]="fail2ban-intrusion-prevention"
+    )
+
     local services=(traefik gluetun plex radarr sonarr prowlarr overseerr homarr deluge fail2ban)
     local failed_services=()
     local recovered_services=()
 
     for service in "${services[@]}"; do
-        local health_status=$(docker inspect --format='{{.State.Health.Status}}' "$service" 2>/dev/null || echo "no-healthcheck")
-        local running_status=$(docker inspect --format='{{.State.Running}}' "$service" 2>/dev/null || echo "false")
+        local container_name="${container_names[$service]}"
+        local health_status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "no-healthcheck")
+        local running_status=$(docker inspect --format='{{.State.Running}}' "$container_name" 2>/dev/null || echo "false")
         local previous_state=$(get_previous_state "$service")
         local current_state="unknown"
 
@@ -295,7 +310,7 @@ check_vpn() {
     log "INFO" "Checking VPN connectivity..."
 
     # Check if gluetun is running
-    if ! docker inspect --format='{{.State.Running}}' gluetun &>/dev/null; then
+    if ! docker inspect --format='{{.State.Running}}' gluetun-vpn &>/dev/null; then
         log "ERROR" "VPN container (gluetun) is not running"
         send_alert "[ALERT] Media Stack: VPN Container Down" "The gluetun VPN container is not running. Torrent traffic may be exposed!" "$COLOR_FAILURE" "failure"
         return 1
@@ -308,7 +323,7 @@ check_vpn() {
 
     for attempt in $(seq 1 $max_retries); do
         log "INFO" "VPN IP check attempt $attempt/$max_retries"
-        vpn_ip=$(docker exec gluetun wget -qO- https://api.ipify.org 2>/dev/null || echo "")
+        vpn_ip=$(docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "")
 
         if [ -n "$vpn_ip" ]; then
             break
@@ -329,7 +344,7 @@ check_vpn() {
     log "INFO" "VPN is connected. Public IP: $vpn_ip"
 
     # Optional: Check if IP is a NordVPN IP (basic check)
-    local vpn_country=$(docker exec gluetun wget -qO- https://ipinfo.io/country 2>/dev/null || echo "")
+    local vpn_country=$(docker exec gluetun-vpn wget -qO- https://ipinfo.io/country 2>/dev/null || echo "")
     if [ -n "$vpn_country" ]; then
         log "INFO" "VPN location: $vpn_country"
     fi
@@ -380,7 +395,7 @@ check_fail2ban() {
     log "INFO" "Checking fail2ban status..."
 
     # Check if fail2ban container is running
-    if ! docker inspect --format='{{.State.Running}}' fail2ban &>/dev/null; then
+    if ! docker inspect --format='{{.State.Running}}' fail2ban-intrusion-prevention &>/dev/null; then
         log "ERROR" "fail2ban container is not running"
         return 1
     fi
@@ -392,7 +407,7 @@ check_fail2ban() {
     # List all active jails and count banned IPs
     local jails=(radarr sonarr prowlarr overseerr plex)
     for jail in "${jails[@]}"; do
-        local banned_count=$(docker exec fail2ban fail2ban-client status "$jail" 2>/dev/null | grep "Currently banned:" | awk '{print $NF}' || echo "0")
+        local banned_count=$(docker exec fail2ban-intrusion-prevention fail2ban-client status "$jail" 2>/dev/null | grep "Currently banned:" | awk '{print $NF}' || echo "0")
         if [ "$banned_count" != "0" ]; then
             total_banned=$((total_banned + banned_count))
             jail_status="${jail_status}\n- ${jail}: ${banned_count} banned IPs"
@@ -496,11 +511,11 @@ get_remote_image_digest() {
 # Check for VPN IP leaks
 check_vpn_leak() {
     # Get VPN's public IP (from gluetun container)
-    local vpn_ip=$(docker exec gluetun wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
+    local vpn_ip=$(docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
 
     # Get Deluge's public IP (should be same as VPN)
     # Note: Deluge shares gluetun's network, so both should report same IP
-    local deluge_ip=$(docker exec gluetun wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
+    local deluge_ip=$(docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
 
     if [ "$vpn_ip" = "unavailable" ] || [ "$deluge_ip" = "unavailable" ]; then
         log "WARN" "VPN IP check failed - could not retrieve IPs"
