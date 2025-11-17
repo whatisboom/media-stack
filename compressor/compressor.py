@@ -22,7 +22,6 @@ CONFIG = {
     'shows_dir': Path(os.getenv('SHOWS_DIR', '/data/Shows')),
     'crf': int(os.getenv('COMPRESSION_CRF', '23')),
     'preset': os.getenv('COMPRESSION_PRESET', 'slow'),
-    'timeout': int(os.getenv('COMPRESSION_TIMEOUT', '14400')),  # Timeout in seconds (default: 4 hours)
     'dry_run': os.getenv('DRY_RUN', 'false').lower() == 'true',
     'discord_webhook': os.getenv('DISCORD_WEBHOOK_URL', ''),
     'plex_url': os.getenv('PLEX_URL', 'http://plex:32400'),
@@ -153,8 +152,7 @@ def compress_video(input_path: Path, output_path: Path) -> bool:
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
-            timeout=CONFIG['timeout']
+            text=True
         )
 
         if result.returncode != 0:
@@ -162,9 +160,6 @@ def compress_video(input_path: Path, output_path: Path) -> bool:
             return False
 
         return True
-    except subprocess.TimeoutExpired:
-        logger.error(f"Compression timeout ({CONFIG['timeout']/3600:.1f}h) for: {input_path}")
-        return False
     except Exception as e:
         logger.error(f"Compression error: {e}")
         return False
