@@ -181,6 +181,24 @@ docker compose up -d --force-recreate
 docker compose down
 ```
 
+### Maintenance Mode
+
+To avoid false-positive alerts when restarting services or performing maintenance:
+
+```bash
+# Stop health monitor before maintenance
+docker compose stop health-monitor-alerts
+
+# Perform your maintenance (restart services, make changes, etc.)
+docker compose restart plex-media-server
+docker compose up -d --force-recreate
+
+# Restart health monitor when done
+docker compose start health-monitor-alerts
+```
+
+**Note:** For quick service restarts, you can optionally skip stopping the health-monitor. Services typically report as "healthy" within 30-60 seconds after restart.
+
 ### Service-Specific Commands
 
 ```bash

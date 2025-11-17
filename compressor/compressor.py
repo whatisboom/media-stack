@@ -9,6 +9,7 @@ import sys
 import json
 import subprocess
 import logging
+import fcntl
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -21,6 +22,7 @@ CONFIG = {
     'shows_dir': Path(os.getenv('SHOWS_DIR', '/data/Shows')),
     'crf': int(os.getenv('COMPRESSION_CRF', '23')),
     'preset': os.getenv('COMPRESSION_PRESET', 'slow'),
+    'timeout': int(os.getenv('COMPRESSION_TIMEOUT', '14400')),  # Timeout in seconds (default: 4 hours)
     'dry_run': os.getenv('DRY_RUN', 'false').lower() == 'true',
     'discord_webhook': os.getenv('DISCORD_WEBHOOK_URL', ''),
     'plex_url': os.getenv('PLEX_URL', 'http://plex:32400'),
@@ -152,7 +154,7 @@ def compress_video(input_path: Path, output_path: Path) -> bool:
             cmd,
             capture_output=True,
             text=True,
-            timeout=7200  # 2 hour timeout for large files
+            timeout=CONFIG['timeout']
         )
 
         if result.returncode != 0:
@@ -161,7 +163,7 @@ def compress_video(input_path: Path, output_path: Path) -> bool:
 
         return True
     except subprocess.TimeoutExpired:
-        logger.error(f"Compression timeout for: {input_path}")
+        logger.error(f"Compression timeout ({CONFIG['timeout']/3600:.1f}h) for: {input_path}")
         return False
     except Exception as e:
         logger.error(f"Compression error: {e}")
@@ -223,7 +225,8 @@ def process_file(downloads_file: Path) -> Dict:
     if not verify_video_playable(temp_output):
         logger.error(f"Compressed file is not playable: {temp_output}")
         stats['error'] = 'Compressed file not playable'
-        temp_output.unlink()
+        if temp_output.exists():
+            temp_output.unlink()
         return stats
 
     compressed_size = get_file_size_gb(temp_output)
@@ -257,6 +260,13 @@ def process_file(downloads_file: Path) -> Dict:
         stats['success'] = True
         logger.info(f"Successfully replaced: {media_file}")
 
+        # Send per-file progress notification to Discord
+        send_discord_notification(
+            f"Compressed: **{media_file.name}**\n"
+            f"Original: {original_size:.2f} GB → Compressed: {compressed_size:.2f} GB\n"
+            f"Space saved: **{stats['space_saved_gb']:.2f} GB** ({compression_ratio:.1%})"
+        )
+
     except Exception as e:
         logger.error(f"Failed to replace file: {e}")
         stats['error'] = f'Failed to replace: {e}'
@@ -288,67 +298,92 @@ def trigger_plex_scan():
 
 def main():
     """Main compression workflow."""
-    start_time = datetime.now()
-    logger.info("=" * 60)
-    logger.info(f"Media Compressor started at {start_time}")
-    logger.info(f"Configuration: CRF={CONFIG['crf']}, Preset={CONFIG['preset']}, DryRun={CONFIG['dry_run']}")
-    logger.info("=" * 60)
+    # Acquire lock to prevent concurrent runs
+    lock_file = Path('/tmp/compressor.lock')
+    lock_fd = None
 
-    # Find all video files in Downloads
-    downloads_videos = find_video_files(CONFIG['downloads_dir'])
-    logger.info(f"Found {len(downloads_videos)} video files in Downloads")
+    try:
+        lock_fd = open(lock_file, 'w')
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
+        lock_fd.flush()
+    except IOError:
+        logger.warning("Another compression process is already running. Exiting.")
+        sys.exit(0)
 
-    if not downloads_videos:
-        logger.info("No videos to process")
-        send_discord_notification("No videos found in Downloads directory")
-        return
+    try:
+        start_time = datetime.now()
+        logger.info("=" * 60)
+        logger.info(f"Media Compressor started at {start_time}")
+        logger.info(f"Configuration: CRF={CONFIG['crf']}, Preset={CONFIG['preset']}, DryRun={CONFIG['dry_run']}")
+        logger.info("=" * 60)
 
-    # Process each file
-    results = []
-    total_space_saved = 0.0
-    successful_compressions = 0
+        # Find all video files in Downloads
+        downloads_videos = find_video_files(CONFIG['downloads_dir'])
+        logger.info(f"Found {len(downloads_videos)} video files in Downloads")
 
-    for video_file in downloads_videos:
-        logger.info(f"\nProcessing: {video_file.name}")
-        stats = process_file(video_file)
-        results.append(stats)
+        if not downloads_videos:
+            logger.info("No videos to process")
+            send_discord_notification("No videos found in Downloads directory")
+            return
 
-        if stats['success']:
-            successful_compressions += 1
-            total_space_saved += stats['space_saved_gb']
+        # Process each file
+        results = []
+        total_space_saved = 0.0
+        successful_compressions = 0
 
-    # Summary
-    end_time = datetime.now()
-    duration = (end_time - start_time).total_seconds() / 60
+        for video_file in downloads_videos:
+            logger.info(f"\nProcessing: {video_file.name}")
+            stats = process_file(video_file)
+            results.append(stats)
 
-    logger.info("=" * 60)
-    logger.info("Compression Summary")
-    logger.info("=" * 60)
-    logger.info(f"Total files processed: {len(results)}")
-    logger.info(f"Successful compressions: {successful_compressions}")
-    logger.info(f"Total space saved: {total_space_saved:.2f} GB")
-    logger.info(f"Duration: {duration:.1f} minutes")
+            if stats['success']:
+                successful_compressions += 1
+                total_space_saved += stats['space_saved_gb']
 
-    # Discord notification
-    if successful_compressions > 0:
-        message = (
-            f"Compressed {successful_compressions}/{len(results)} video files\n"
-            f"Space saved: **{total_space_saved:.2f} GB**\n"
-            f"Duration: {duration:.1f} min"
-        )
-        send_discord_notification(message)
+        # Summary
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds() / 60
 
-        # Trigger Plex scan
-        trigger_plex_scan()
+        logger.info("=" * 60)
+        logger.info("Compression Summary")
+        logger.info("=" * 60)
+        logger.info(f"Total files processed: {len(results)}")
+        logger.info(f"Successful compressions: {successful_compressions}")
+        logger.info(f"Total space saved: {total_space_saved:.2f} GB")
+        logger.info(f"Duration: {duration:.1f} minutes")
 
-    # Log detailed results
-    logger.info("\nDetailed Results:")
-    for result in results:
-        logger.info(json.dumps(result))
+        # Discord notification
+        if successful_compressions > 0:
+            dry_run_prefix = "🔍 [DRY RUN] " if CONFIG['dry_run'] else ""
+            message = (
+                f"{dry_run_prefix}Compressed {successful_compressions}/{len(results)} video files\n"
+                f"Space saved: **{total_space_saved:.2f} GB**\n"
+                f"Duration: {duration:.1f} min"
+            )
+            send_discord_notification(message)
 
-    logger.info("=" * 60)
-    logger.info("Media Compressor finished")
-    logger.info("=" * 60)
+            # Trigger Plex scan
+            trigger_plex_scan()
+
+        # Log detailed results
+        logger.info("\nDetailed Results:")
+        for result in results:
+            logger.info(json.dumps(result))
+
+        logger.info("=" * 60)
+        logger.info("Media Compressor finished")
+        logger.info("=" * 60)
+
+    finally:
+        # Release lock
+        if lock_fd:
+            try:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+                lock_fd.close()
+                lock_file.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to release lock: {e}")
 
 
 if __name__ == '__main__':

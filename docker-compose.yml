@@ -2,7 +2,7 @@ services:
   # Reverse proxy - handles HTTPS and routing for public services
   traefik:
     image: traefik:v3.0
-    container_name: traefik
+    container_name: traefik-reverse-proxy
     command:
       - --api.dashboard=true
       - --providers.docker=true
@@ -66,7 +66,7 @@ services:
   # VPN container - routes Deluge traffic through NordVPN
   gluetun:
     image: qmcgaw/gluetun
-    container_name: gluetun
+    container_name: gluetun-vpn
     cap_add:
       - NET_ADMIN
     devices:
@@ -114,7 +114,7 @@ services:
 
   plex:
     image: plexinc/pms-docker
-    container_name: plex
+    container_name: plex-media-server
     environment:
       - TZ=${TZ:-America/Chicago}
       - PLEX_CLAIM=${PLEX_CLAIM_TOKEN}
@@ -165,7 +165,7 @@ services:
 
   tautulli:
     image: lscr.io/linuxserver/tautulli:latest
-    container_name: tautulli
+    container_name: tautulli-plex-monitoring
     environment:
       - PUID=1000
       - PGID=1000
@@ -200,7 +200,7 @@ services:
 
   radarr:
     image: lscr.io/linuxserver/radarr:latest
-    container_name: radarr
+    container_name: radarr-movie-management
     environment:
       - PUID=1000
       - PGID=1000
@@ -236,7 +236,7 @@ services:
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
-    container_name: sonarr
+    container_name: sonarr-tv-management
     environment:
       - PUID=1000
       - PGID=1000
@@ -272,7 +272,7 @@ services:
 
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
-    container_name: bazarr
+    container_name: bazarr-subtitle-manager
     environment:
       - PUID=1000
       - PGID=1000
@@ -307,7 +307,7 @@ services:
 
   overseerr:
     image: sctx/overseerr:develop
-    container_name: overseerr
+    container_name: overseerr-request-manager
     environment:
       - LOG_LEVEL=debug
       - TZ=${TZ:-America/Chicago}
@@ -350,7 +350,7 @@ services:
 
   homarr:
     image: ghcr.io/ajnart/homarr:latest
-    container_name: homarr
+    container_name: homarr-dashboard
     environment:
       - TZ=${TZ:-America/Chicago}
     ports:
@@ -391,7 +391,7 @@ services:
 
   deluge:
     image: lscr.io/linuxserver/deluge:latest
-    container_name: deluge
+    container_name: deluge-torrent-client
     network_mode: "service:gluetun"  # Route all traffic through VPN
     environment:
       - PUID=1000
@@ -426,7 +426,7 @@ services:
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
-    container_name: prowlarr
+    container_name: prowlarr-indexer-manager
     environment:
       - PUID=1000
       - PGID=1000
@@ -460,7 +460,7 @@ services:
 
   health-monitor:
     build: ./monitoring
-    container_name: health-monitor
+    container_name: health-monitor-alerts
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /Volumes/Samsung_T5:/data:ro
@@ -506,7 +506,7 @@ services:
 
   backup:
     build: ./backup
-    container_name: backup
+    container_name: backup-automation
     volumes:
       - .:/workspace
       - ./backup/rclone.conf:/root/.config/rclone/rclone.conf:ro
@@ -543,7 +543,7 @@ services:
 
   compressor:
     build: ./compressor
-    container_name: compressor
+    container_name: compressor-media-encoder
     volumes:
       - /Volumes/Samsung_T5:/data
       - ./logs:/logs
@@ -553,6 +553,7 @@ services:
       - SHOWS_DIR=/data/Shows
       - COMPRESSION_CRF=${COMPRESSION_CRF:-23}
       - COMPRESSION_PRESET=${COMPRESSION_PRESET:-slow}
+      - COMPRESSION_TIMEOUT=${COMPRESSION_TIMEOUT:-14400}
       - COMPRESSION_SCHEDULE=${COMPRESSION_SCHEDULE:-0 3 * * *}
       - DRY_RUN=${DRY_RUN:-false}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
@@ -586,7 +587,7 @@ services:
 
   recyclarr:
     image: ghcr.io/recyclarr/recyclarr:latest
-    container_name: recyclarr
+    container_name: recyclarr-trash-guides
     profiles:
       - tools
     volumes:
@@ -606,7 +607,7 @@ services:
 
   watchtower:
     image: containrrr/watchtower:latest
-    container_name: watchtower
+    container_name: watchtower-update-monitor
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
@@ -637,7 +638,7 @@ services:
 
   fail2ban:
     image: lscr.io/linuxserver/fail2ban:latest
-    container_name: fail2ban
+    container_name: fail2ban-intrusion-prevention
     cap_add:
       - NET_ADMIN
       - NET_RAW
