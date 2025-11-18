@@ -113,8 +113,8 @@ def get_video_codec(file_path: Path) -> Optional[str]:
         return None
 
 
-def verify_video_playable(file_path: Path) -> bool:
-    """Verify video file is playable using ffprobe."""
+def get_video_duration(file_path: Path) -> Optional[float]:
+    """Get video duration in seconds using ffprobe."""
     try:
         result = subprocess.run(
             ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
@@ -123,18 +123,31 @@ def verify_video_playable(file_path: Path) -> bool:
             text=True,
             timeout=30
         )
-        return result.returncode == 0 and result.stdout.strip() != ''
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+        return None
     except Exception as e:
-        logger.error(f"Failed to verify video: {file_path} - {e}")
-        return False
+        logger.error(f"Failed to get duration for: {file_path} - {e}")
+        return None
+
+
+def verify_video_playable(file_path: Path) -> bool:
+    """Verify video file is playable using ffprobe."""
+    duration = get_video_duration(file_path)
+    return duration is not None and duration > 0
 
 
 def compress_video(input_path: Path, output_path: Path) -> bool:
     """
-    Compress video using ffmpeg with HEVC (x265).
+    Compress video using ffmpeg with HEVC (x265) and track progress.
     Returns True if successful, False otherwise.
     """
-    logger.info(f"Compressing: {input_path} -> {output_path}")
+    # Get duration for progress tracking
+    duration = get_video_duration(input_path)
+    if duration:
+        logger.info(f"Compressing: {input_path} (duration: {duration/60:.1f} min) -> {output_path}")
+    else:
+        logger.info(f"Compressing: {input_path} -> {output_path}")
 
     cmd = [
         'ffmpeg',
@@ -144,21 +157,52 @@ def compress_video(input_path: Path, output_path: Path) -> bool:
         '-crf', str(CONFIG['crf']),
         '-c:a', 'copy',  # Copy audio without re-encoding
         '-c:s', 'copy',  # Copy subtitles
+        '-progress', 'pipe:2',  # Output progress to stderr
         '-y',  # Overwrite output file
         str(output_path)
     ]
 
     try:
-        result = subprocess.run(
+        start_time = datetime.now()
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True
         )
 
-        if result.returncode != 0:
-            logger.error(f"FFmpeg failed: {result.stderr}")
+        last_progress_log = 0
+        for line in process.stderr:
+            # Parse ffmpeg progress output (format: "out_time_ms=123456789")
+            if duration and 'out_time_ms=' in line:
+                try:
+                    time_ms = int(line.split('out_time_ms=')[1].strip())
+                    current_time = time_ms / 1_000_000  # Convert microseconds to seconds
+                    progress_pct = (current_time / duration) * 100
+
+                    # Log progress every 10%
+                    if int(progress_pct / 10) > last_progress_log:
+                        last_progress_log = int(progress_pct / 10)
+                        elapsed = (datetime.now() - start_time).total_seconds()
+                        if progress_pct > 0:
+                            eta_seconds = (elapsed / progress_pct) * (100 - progress_pct)
+                            logger.info(
+                                f"Progress: {progress_pct:.1f}% | "
+                                f"Elapsed: {elapsed/60:.1f}m | "
+                                f"ETA: {eta_seconds/60:.1f}m"
+                            )
+                except (ValueError, IndexError):
+                    pass
+
+        process.wait()
+
+        if process.returncode != 0:
+            stderr_output = process.stderr.read() if process.stderr else ""
+            logger.error(f"FFmpeg failed: {stderr_output}")
             return False
 
+        total_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Compression completed in {total_time/60:.1f} minutes")
         return True
     except Exception as e:
         logger.error(f"Compression error: {e}")
