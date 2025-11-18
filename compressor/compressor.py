@@ -157,6 +157,8 @@ def compress_video(input_path: Path, output_path: Path) -> bool:
         '-crf', str(CONFIG['crf']),
         '-c:a', 'copy',  # Copy audio without re-encoding
         '-c:s', 'copy',  # Copy subtitles
+        '-xerror',  # Exit immediately on any error
+        '-err_detect', 'aggressive',  # Detect encoding errors
         '-progress', 'pipe:2',  # Output progress to stderr
         '-y',  # Overwrite output file
         str(output_path)
@@ -243,6 +245,11 @@ def process_file(downloads_file: Path) -> Dict:
         stats['error'] = f'Already HEVC ({video_codec})'
         return stats
 
+    # Get original duration for verification later
+    original_duration = get_video_duration(media_file)
+    if not original_duration:
+        logger.warning(f"Could not get duration for: {media_file}")
+
     # Create temporary compressed file (preserve extension for ffmpeg)
     temp_output = media_file.parent / f".{media_file.stem}.tmp{media_file.suffix}"
 
@@ -260,10 +267,53 @@ def process_file(downloads_file: Path) -> Dict:
             temp_output.unlink()
         return stats
 
-    # Verify compressed file
-    if not verify_video_playable(temp_output):
-        logger.error(f"Compressed file is not playable: {temp_output}")
-        stats['error'] = 'Compressed file not playable'
+    # Comprehensive verification
+    # 1. Check duration matches (detect truncated files)
+    compressed_duration = get_video_duration(temp_output)
+    if not compressed_duration:
+        logger.error(f"Compressed file has no duration: {temp_output}")
+        stats['error'] = 'Compressed file has no duration'
+        if temp_output.exists():
+            temp_output.unlink()
+        return stats
+
+    if original_duration and abs(compressed_duration - original_duration) > 5:
+        logger.error(
+            f"Duration mismatch: original {original_duration:.1f}s, "
+            f"compressed {compressed_duration:.1f}s"
+        )
+        stats['error'] = 'Duration mismatch (file truncated)'
+        if temp_output.exists():
+            temp_output.unlink()
+        return stats
+
+    # 2. Verify codec is HEVC
+    compressed_codec = get_video_codec(temp_output)
+    if compressed_codec not in ('hevc', 'h265'):
+        logger.error(f"Wrong codec: expected hevc, got {compressed_codec}")
+        stats['error'] = f'Wrong codec: {compressed_codec}'
+        if temp_output.exists():
+            temp_output.unlink()
+        return stats
+
+    # 3. Decode test - actually play a 10-second sample
+    try:
+        result = subprocess.run(
+            ['ffmpeg', '-v', 'error', '-i', str(temp_output),
+             '-t', '10', '-f', 'null', '-'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode != 0 or result.stderr:
+            logger.error(f"Decode test failed: {result.stderr}")
+            stats['error'] = 'Decode test failed'
+            if temp_output.exists():
+                temp_output.unlink()
+            return stats
+    except Exception as e:
+        logger.error(f"Decode test error: {e}")
+        stats['error'] = f'Decode test error: {e}'
         if temp_output.exists():
             temp_output.unlink()
         return stats

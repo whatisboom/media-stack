@@ -564,11 +564,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 2G
+          cpus: '4.0'
+          memory: 8G
         reservations:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '1.0'
+          memory: 2G
     healthcheck:
       test: ["CMD", "sh", "-c", "test -f /logs/compressor.log"]
       interval: 24h
