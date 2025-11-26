@@ -63,7 +63,7 @@ Overseerr (Requests)
 **Compression & Storage Management Flow:**
 1. Radarr/Sonarr remove torrents from Deluge after seeding goals met (72h OR 2.0 ratio)
 2. Files remain in `/data/Downloads` after torrent removal
-3. Compressor service runs daily (3 AM) to find orphaned video files
+3. Compressor service runs on-demand (manual or scheduled via host cron) to find orphaned video files
 4. For each file in Downloads, compressor finds matching file in Movies/Shows
 5. Compressor encodes to HEVC (x265) with CRF 23 for 40-50% size reduction
 6. Atomically replaces original file in media library (preserves Plex metadata)
@@ -228,12 +228,12 @@ docker exec gluetun wget -qO- http://ipinfo.io/country
 docker compose logs traefik --tail=50
 docker compose logs traefik | grep -i "certificate"
 
-# Run media compression manually
-./scripts/compress-media.sh                # Run compression now
-./scripts/compress-media.sh --dry-run      # Test without making changes
+# Run media compression (on-demand, container exits after completion)
+docker compose --profile tools run --rm compressor     # Run compression now
+./scripts/compress-media.sh                            # Alternative: wrapper script
+./scripts/compress-media.sh --dry-run                  # Test without making changes
 
 # Check compression logs
-docker compose logs compressor --tail=50
 tail -f logs/compressor.log
 ```
 
@@ -323,12 +323,12 @@ tail -f logs/compressor.log
 **Compressor** (`.env` configuration):
 - **COMPRESSION_CRF**: Quality setting (23 = visually lossless, 28 = aggressive)
 - **COMPRESSION_PRESET**: Encoding speed (slow = better compression, fast = quicker)
-- **COMPRESSION_SCHEDULE**: Cron schedule (default: `0 3 * * *` = 3 AM daily)
 - **MIN_COMPRESSION_RATIO**: Only keep compressed if <80% original size
 - **DRY_RUN**: Set to `true` to test without making changes
-- Automatically compresses video files after torrent removal
+- Run on-demand via: `docker compose --profile tools run --rm compressor`
 - Uses HEVC (x265) codec for 40-50% space savings
 - Preserves Plex metadata and watch history
+- Schedule with host cron if automation desired (frees container resources between runs)
 
 ## TRaSH Guides Compliance
 
@@ -444,15 +444,16 @@ This setup follows TRaSH Guides best practices:
 - Manually test: Add a movie, wait for it to seed, verify torrent removed
 
 ### Compressor Not Running or Finding Files
-- Check if compressor is running: `docker compose ps compressor`
-- Verify scheduled time in .env: `COMPRESSION_SCHEDULE=0 3 * * *`
-- Check logs: `docker compose logs compressor` or `tail -f logs/compressor.log`
+- Compressor runs on-demand only (not a persistent service)
+- Run manually: `docker compose --profile tools run --rm compressor`
+- Check logs: `tail -f logs/compressor.log`
 - Verify files exist in `/data/Downloads` with no active torrent
-- Test manually: `./scripts/compress-media.sh --dry-run`
+- Test without changes: `./scripts/compress-media.sh --dry-run`
 - Check Discord webhook configured: `DISCORD_WEBHOOK_URL` in .env
+- Schedule via host cron if desired (see scripts/compress-media.sh)
 
 ### Compression Failed or Poor Quality
-- Check ffmpeg errors in logs: `docker compose logs compressor`
+- Check ffmpeg errors in logs: `tail -f logs/compressor.log`
 - Verify sufficient disk space for temporary files (needs 2x file size free)
 - Adjust CRF for quality: Lower = better quality (23-28 recommended)
 - Change preset for speed: `fast` encodes quicker, `slow` compresses better

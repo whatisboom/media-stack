@@ -10,6 +10,7 @@ import json
 import subprocess
 import logging
 import fcntl
+import multiprocessing
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -27,6 +28,9 @@ CONFIG = {
     'plex_url': os.getenv('PLEX_URL', 'http://plex:32400'),
     'plex_token': os.getenv('PLEX_CLAIM', ''),  # Optional
     'min_compression_ratio': float(os.getenv('MIN_COMPRESSION_RATIO', '0.8')),  # Only keep if <80% original size
+    'deluge_host': os.getenv('DELUGE_HOST', 'gluetun'),
+    'deluge_port': int(os.getenv('DELUGE_PORT', '8112')),
+    'deluge_password': os.getenv('DELUGE_PASSWORD', ''),
 }
 
 # Video file extensions to process
@@ -56,6 +60,73 @@ def send_discord_notification(message: str, is_error: bool = False):
         requests.post(CONFIG['discord_webhook'], json=payload, timeout=10)
     except Exception as e:
         logger.warning(f"Failed to send Discord notification: {e}")
+
+
+def get_active_seeding_files() -> set:
+    """
+    Query Deluge API once to get all actively seeding file names.
+    Returns a set of filenames for O(1) lookup during scan.
+    """
+    if not CONFIG['deluge_password']:
+        logger.warning("No Deluge password configured, skipping seeding check")
+        return set()
+
+    try:
+        session = requests.Session()
+        deluge_url = f"http://{CONFIG['deluge_host']}:{CONFIG['deluge_port']}/json"
+
+        # Authenticate
+        auth_response = session.post(
+            deluge_url,
+            json={"method": "auth.login", "params": [CONFIG['deluge_password']], "id": 1},
+            timeout=10
+        )
+
+        if not auth_response.ok or not auth_response.json().get('result'):
+            logger.warning(f"Deluge authentication failed: {auth_response.text}")
+            return set()
+
+        # Get all torrents with their files
+        torrents_response = session.post(
+            deluge_url,
+            json={
+                "method": "core.get_torrents_status",
+                "params": [{}, ["files", "save_path", "state"]],
+                "id": 2
+            },
+            timeout=10
+        )
+
+        if not torrents_response.ok:
+            logger.warning(f"Failed to get torrents from Deluge: {torrents_response.text}")
+            return set()
+
+        active_files = set()
+        torrents = torrents_response.json().get('result', {})
+
+        for torrent_id, torrent_data in torrents.items():
+            # Only check actively seeding/downloading torrents
+            state = torrent_data.get('state', '')
+            if state not in ('Seeding', 'Downloading'):
+                continue
+
+            save_path = Path(torrent_data.get('save_path', ''))
+            files = torrent_data.get('files', [])
+
+            for file_info in files:
+                # Build filename (Deluge returns relative paths)
+                file_path = file_info.get('path', '')
+                if file_path:
+                    # Extract just the filename for matching
+                    filename = Path(file_path).name
+                    active_files.add(filename)
+
+        logger.info(f"Found {len(active_files)} files actively seeding in Deluge")
+        return active_files
+
+    except Exception as e:
+        logger.warning(f"Failed to query Deluge API: {e}")
+        return set()  # Fail-safe: empty set means no files skipped
 
 
 def find_video_files(directory: Path) -> List[Path]:
@@ -137,24 +208,57 @@ def verify_video_playable(file_path: Path) -> bool:
     return duration is not None and duration > 0
 
 
-def compress_video(input_path: Path, output_path: Path) -> bool:
+def get_optimal_preset(file_size_gb: float) -> str:
+    """
+    Choose compression preset based on file size for best time/quality tradeoff.
+    Large files: faster preset (quality difference minimal on high-res)
+    Small files: slower preset (maximize quality worth the time)
+    """
+    if file_size_gb > 15:
+        return 'medium'  # Large 4K files: speed priority
+    elif file_size_gb > 8:
+        return 'slow'    # Medium files: balanced
+    else:
+        return 'slower'  # Small files: quality priority
+
+
+def compress_video(input_path: Path, output_path: Path, file_size_gb: float) -> bool:
     """
     Compress video using ffmpeg with HEVC (x265) and track progress.
     Returns True if successful, False otherwise.
     """
     # Get duration for progress tracking
     duration = get_video_duration(input_path)
+
+    # Choose optimal preset based on file size
+    preset = get_optimal_preset(file_size_gb)
+
+    # Auto-detect CPU cores for multi-threading
+    cpu_count = multiprocessing.cpu_count()
+
+    # Build x265 parameters for optimal performance
+    x265_params = [
+        f'pools={cpu_count}',      # Use all CPU cores
+        'frame-threads=4',         # Parallel frame encoding
+        'no-slow-firstpass=1',     # Skip expensive first-pass analysis
+        'rc-lookahead=25',         # Reasonable lookahead (vs default 40)
+    ]
+
     if duration:
-        logger.info(f"Compressing: {input_path} (duration: {duration/60:.1f} min) -> {output_path}")
+        logger.info(f"Compressing: {input_path} (duration: {duration/60:.1f} min, size: {file_size_gb:.2f} GB)")
+        logger.info(f"Using preset '{preset}' with {cpu_count} CPU threads")
     else:
-        logger.info(f"Compressing: {input_path} -> {output_path}")
+        logger.info(f"Compressing: {input_path} (size: {file_size_gb:.2f} GB)")
+        logger.info(f"Using preset '{preset}' with {cpu_count} CPU threads")
 
     cmd = [
         'ffmpeg',
+        '-threads', str(cpu_count),  # Multi-threading for ffmpeg
         '-i', str(input_path),
         '-c:v', 'libx265',
-        '-preset', CONFIG['preset'],
+        '-preset', preset,  # Dynamic preset based on file size
         '-crf', str(CONFIG['crf']),
+        '-x265-params', ':'.join(x265_params),  # Optimized x265 parameters
         '-c:a', 'copy',  # Copy audio without re-encoding
         '-c:s', 'copy',  # Copy subtitles
         '-xerror',  # Exit immediately on any error
@@ -211,39 +315,95 @@ def compress_video(input_path: Path, output_path: Path) -> bool:
         return False
 
 
-def process_file(downloads_file: Path) -> Dict:
+def scan_and_categorize_files(downloads_videos: List[Path]) -> Dict:
     """
-    Process a single file: find matching media file, compress, and replace.
+    Scan all download files and categorize them before processing.
+    Returns categorized file lists and statistics.
+    """
+    categories = {
+        'already_hevc': [],
+        'no_match': [],
+        'actively_seeding': [],
+        'to_compress': []
+    }
+
+    stats = {
+        'total_files': len(downloads_videos),
+        'already_hevc': 0,
+        'no_match': 0,
+        'actively_seeding': 0,
+        'to_compress': 0,
+        'total_original_gb': 0.0,
+        'potential_space_gb': 0.0
+    }
+
+    logger.info("Scanning and categorizing files...")
+
+    # Get actively seeding files from Deluge (single API call)
+    active_seeding_files = get_active_seeding_files()
+
+    for downloads_file in downloads_videos:
+        # Check if file is actively seeding in Deluge
+        if downloads_file.name in active_seeding_files:
+            categories['actively_seeding'].append(downloads_file)
+            stats['actively_seeding'] += 1
+            continue
+
+        # Find matching file in media directories
+        media_file = find_matching_media_file(downloads_file)
+
+        if not media_file:
+            categories['no_match'].append(downloads_file)
+            stats['no_match'] += 1
+            continue
+
+        # Check if already HEVC-encoded
+        video_codec = get_video_codec(media_file)
+        if video_codec in ('hevc', 'h265'):
+            categories['already_hevc'].append({
+                'downloads_file': downloads_file,
+                'media_file': media_file,
+                'codec': video_codec
+            })
+            stats['already_hevc'] += 1
+            continue
+
+        # Ready for compression
+        original_size = get_file_size_gb(media_file)
+        categories['to_compress'].append({
+            'downloads_file': downloads_file,
+            'media_file': media_file,
+            'original_size_gb': original_size
+        })
+        stats['to_compress'] += 1
+        stats['total_original_gb'] += original_size
+
+    # Estimate potential space savings (assuming ~50% compression)
+    stats['potential_space_gb'] = stats['total_original_gb'] * 0.5
+
+    return categories, stats
+
+
+def process_file(downloads_file: Path, media_file: Path, original_size: float) -> Dict:
+    """
+    Process a single file: compress and replace.
+    Args:
+        downloads_file: Path to file in Downloads directory
+        media_file: Path to matching file in Movies/Shows (already verified to exist)
+        original_size: Size of original file in GB (pre-calculated)
     Returns statistics about the operation.
     """
     stats = {
         'file': str(downloads_file),
         'success': False,
-        'original_size_gb': 0.0,
+        'original_size_gb': original_size,
         'compressed_size_gb': 0.0,
         'space_saved_gb': 0.0,
         'error': None
     }
 
-    # Find matching file in media directories
-    media_file = find_matching_media_file(downloads_file)
-    if not media_file:
-        logger.info(f"No matching media file found for: {downloads_file.name}")
-        stats['error'] = 'No matching media file'
-        return stats
-
-    original_size = get_file_size_gb(media_file)
-    stats['original_size_gb'] = original_size
-
-    logger.info(f"Found match: {downloads_file.name} -> {media_file}")
+    logger.info(f"Processing: {downloads_file.name} -> {media_file}")
     logger.info(f"Original size: {original_size:.2f} GB")
-
-    # Check if already HEVC-encoded (skip re-encoding for minimal gains)
-    video_codec = get_video_codec(media_file)
-    if video_codec in ('hevc', 'h265'):
-        logger.info(f"Skipping already HEVC-encoded file (codec: {video_codec}): {media_file.name}")
-        stats['error'] = f'Already HEVC ({video_codec})'
-        return stats
 
     # Get original duration for verification later
     original_duration = get_video_duration(media_file)
@@ -261,7 +421,7 @@ def process_file(downloads_file: Path) -> Dict:
         return stats
 
     # Compress video
-    if not compress_video(media_file, temp_output):
+    if not compress_video(media_file, temp_output, original_size):
         stats['error'] = 'Compression failed'
         if temp_output.exists():
             temp_output.unlink()
@@ -333,8 +493,9 @@ def process_file(downloads_file: Path) -> Dict:
         stats['error'] = f'Insufficient compression ({compression_ratio:.2%})'
         return stats
 
-    logger.info(f"Compressed size: {compressed_size:.2f} GB ({compression_ratio:.1%})")
-    logger.info(f"Space saved: {stats['space_saved_gb']:.2f} GB")
+    space_saved_pct = (1 - compression_ratio) * 100
+    logger.info(f"Compressed size: {compressed_size:.2f} GB ({compression_ratio:.1%} of original)")
+    logger.info(f"Space saved: {stats['space_saved_gb']:.2f} GB ({space_saved_pct:.1f}% reduction)")
 
     # Atomically replace original with compressed version
     try:
@@ -353,7 +514,7 @@ def process_file(downloads_file: Path) -> Dict:
         send_discord_notification(
             f"Compressed: **{media_file.name}**\n"
             f"Original: {original_size:.2f} GB → Compressed: {compressed_size:.2f} GB\n"
-            f"Space saved: **{stats['space_saved_gb']:.2f} GB** ({compression_ratio:.1%})"
+            f"Space saved: **{stats['space_saved_gb']:.2f} GB** ({space_saved_pct:.1f}% reduction)"
         )
 
     except Exception as e:
@@ -416,19 +577,53 @@ def main():
             send_discord_notification("No videos found in Downloads directory")
             return
 
-        # Process each file
-        results = []
-        total_space_saved = 0.0
-        successful_compressions = 0
+        # Phase 1: Scan and categorize all files
+        logger.info("=" * 60)
+        logger.info("Phase 1: Scanning and Categorizing Files")
+        logger.info("=" * 60)
 
-        for video_file in downloads_videos:
-            logger.info(f"\nProcessing: {video_file.name}")
-            stats = process_file(video_file)
-            results.append(stats)
+        categories, scan_stats = scan_and_categorize_files(downloads_videos)
+
+        logger.info("=" * 60)
+        logger.info("Scan Results")
+        logger.info("=" * 60)
+        logger.info(f"Found {scan_stats['total_files']} video files in Downloads:")
+        logger.info(f"  - {scan_stats['actively_seeding']} actively seeding (skipped)")
+        logger.info(f"  - {scan_stats['already_hevc']} already HEVC (skipped)")
+        logger.info(f"  - {scan_stats['no_match']} no matching media file (skipped)")
+        logger.info(f"  - {scan_stats['to_compress']} ready for compression ({scan_stats['total_original_gb']:.2f} GB)")
+
+        if scan_stats['to_compress'] == 0:
+            logger.info("No files to compress")
+            return
+
+        # Phase 2: Compress files
+        logger.info("=" * 60)
+        logger.info("Phase 2: Compressing Files")
+        logger.info("=" * 60)
+
+        compression_results = {
+            'successful': 0,
+            'failed': 0,
+            'insufficient_compression': 0,
+            'total_space_saved_gb': 0.0
+        }
+
+        for file_info in categories['to_compress']:
+            downloads_file = file_info['downloads_file']
+            media_file = file_info['media_file']
+            original_size = file_info['original_size_gb']
+
+            logger.info(f"\nProcessing: {downloads_file.name}")
+            stats = process_file(downloads_file, media_file, original_size)
 
             if stats['success']:
-                successful_compressions += 1
-                total_space_saved += stats['space_saved_gb']
+                compression_results['successful'] += 1
+                compression_results['total_space_saved_gb'] += stats['space_saved_gb']
+            elif stats['error'] and 'Insufficient compression' in stats['error']:
+                compression_results['insufficient_compression'] += 1
+            else:
+                compression_results['failed'] += 1
 
         # Summary
         end_time = datetime.now()
@@ -437,28 +632,37 @@ def main():
         logger.info("=" * 60)
         logger.info("Compression Summary")
         logger.info("=" * 60)
-        logger.info(f"Total files processed: {len(results)}")
-        logger.info(f"Successful compressions: {successful_compressions}")
-        logger.info(f"Total space saved: {total_space_saved:.2f} GB")
+        logger.info(f"Total files scanned: {scan_stats['total_files']}")
+        logger.info(f"  - Actively seeding: {scan_stats['actively_seeding']} (skipped)")
+        logger.info(f"  - Already HEVC: {scan_stats['already_hevc']} (skipped)")
+        logger.info(f"  - No match: {scan_stats['no_match']} (skipped)")
+        logger.info(f"  - Ready to compress: {scan_stats['to_compress']}")
+        logger.info("")
+        logger.info(f"Compression results:")
+        logger.info(f"  - Successfully compressed: {compression_results['successful']}/{scan_stats['to_compress']}")
+        if compression_results['insufficient_compression'] > 0:
+            logger.info(f"  - Insufficient compression (kept original): {compression_results['insufficient_compression']}")
+        if compression_results['failed'] > 0:
+            logger.info(f"  - Failed: {compression_results['failed']}")
+        logger.info("")
+        logger.info(f"Total space saved: {compression_results['total_space_saved_gb']:.2f} GB")
         logger.info(f"Duration: {duration:.1f} minutes")
 
         # Discord notification
-        if successful_compressions > 0:
+        if compression_results['successful'] > 0:
             dry_run_prefix = "🔍 [DRY RUN] " if CONFIG['dry_run'] else ""
             message = (
-                f"{dry_run_prefix}Compressed {successful_compressions}/{len(results)} video files\n"
-                f"Space saved: **{total_space_saved:.2f} GB**\n"
-                f"Duration: {duration:.1f} min"
+                f"{dry_run_prefix}Compressed {compression_results['successful']}/{scan_stats['to_compress']} video files\n"
+                f"Space saved: **{compression_results['total_space_saved_gb']:.2f} GB**\n"
+                f"Duration: {duration:.1f} min\n\n"
+                f"Scan: {scan_stats['total_files']} files "
+                f"({scan_stats['actively_seeding']} seeding, {scan_stats['already_hevc']} already HEVC, "
+                f"{scan_stats['no_match']} no match, {scan_stats['to_compress']} to compress)"
             )
             send_discord_notification(message)
 
             # Trigger Plex scan
             trigger_plex_scan()
-
-        # Log detailed results
-        logger.info("\nDetailed Results:")
-        for result in results:
-            logger.info(json.dumps(result))
 
         logger.info("=" * 60)
         logger.info("Media Compressor finished")
