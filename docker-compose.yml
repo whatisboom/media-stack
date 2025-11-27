@@ -462,7 +462,7 @@ services:
     build: ./monitoring
     container_name: health-monitor-alerts
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:rw
       - /Volumes/Samsung_T5:/data:ro
       - ./logs:/logs
     environment:
@@ -470,6 +470,9 @@ services:
       - DISK_SPACE_THRESHOLD=${DISK_SPACE_THRESHOLD:-10}
       - ALERT_COOLDOWN=${ALERT_COOLDOWN:-3600}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - AUTO_RESTART_ENABLED=${AUTO_RESTART_ENABLED:-true}
+      - RESTART_GRACE_PERIOD=${RESTART_GRACE_PERIOD:-60}
+      - RESTART_COOLDOWN=${RESTART_COOLDOWN:-900}
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
     deploy:

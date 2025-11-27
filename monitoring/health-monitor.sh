@@ -17,6 +17,11 @@ DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 DISK_SPACE_THRESHOLD="${DISK_SPACE_THRESHOLD:-10}"
 ALERT_COOLDOWN="${ALERT_COOLDOWN:-3600}"
 
+# Auto-restart configuration
+AUTO_RESTART_ENABLED="${AUTO_RESTART_ENABLED:-true}"
+RESTART_GRACE_PERIOD="${RESTART_GRACE_PERIOD:-60}"
+RESTART_COOLDOWN="${RESTART_COOLDOWN:-900}"
+
 # Alert colors for Discord embeds
 COLOR_FAILURE=15158332   # Red
 COLOR_RECOVERY=5763719   # Green
@@ -89,7 +94,8 @@ initialize_state() {
     "last_failure_alert": 0,
     "last_recovery_alert": 0,
     "last_disk_alert": 0,
-    "last_update_alert": 0
+    "last_update_alert": 0,
+    "last_vpn_leak_alert": 0
   },
   "updates": {
     "last_check": "",
@@ -103,7 +109,18 @@ EOF
 # Get previous service state
 get_previous_state() {
     local service="$1"
-    jq -r ".services.\"${service}\" // \"unknown\"" "$STATE_FILE"
+    local state_value=$(jq -r ".services.\"${service}\"" "$STATE_FILE" 2>/dev/null)
+
+    # Handle legacy format (string) vs new format (object)
+    if [ "$state_value" = "null" ] || [ -z "$state_value" ]; then
+        echo "unknown"
+    elif echo "$state_value" | jq -e 'type == "object"' > /dev/null 2>&1; then
+        # New format: extract state field
+        echo "$state_value" | jq -r '.state // "unknown"'
+    else
+        # Legacy format: use string directly
+        echo "$state_value"
+    fi
 }
 
 # Update service state
@@ -111,8 +128,99 @@ update_service_state() {
     local service="$1"
     local state="$2"
     local temp_file=$(mktemp)
-    jq ".services.\"${service}\" = \"${state}\"" "$STATE_FILE" > "$temp_file"
+    local timestamp=$(date +%s)
+
+    # Check if service exists and has object format
+    local existing=$(jq -r ".services.\"${service}\"" "$STATE_FILE" 2>/dev/null)
+
+    if echo "$existing" | jq -e 'type == "object"' > /dev/null 2>&1; then
+        # Update existing object, preserve restart fields if state hasn't changed
+        local prev_state=$(echo "$existing" | jq -r '.state // ""')
+        if [ "$prev_state" = "$state" ]; then
+            # State unchanged, preserve all fields
+            jq ".services.\"${service}\".state = \"${state}\"" "$STATE_FILE" > "$temp_file"
+        else
+            # State changed, update timestamp but preserve restart fields
+            jq ".services.\"${service}\".state = \"${state}\" | .services.\"${service}\".last_state_change = ${timestamp}" "$STATE_FILE" > "$temp_file"
+        fi
+    else
+        # Create new object format (migration from legacy or new service)
+        jq ".services.\"${service}\" = {\"state\": \"${state}\", \"last_state_change\": ${timestamp}, \"restart_attempted\": false, \"last_restart_time\": 0}" "$STATE_FILE" > "$temp_file"
+    fi
+
     mv "$temp_file" "$STATE_FILE"
+}
+
+# Get service restart attempted status
+get_service_restart_attempted() {
+    local service="$1"
+    local state_value=$(jq -r ".services.\"${service}\"" "$STATE_FILE" 2>/dev/null)
+
+    if echo "$state_value" | jq -e 'type == "object"' > /dev/null 2>&1; then
+        echo "$state_value" | jq -r '.restart_attempted // false'
+    else
+        echo "false"
+    fi
+}
+
+# Get service last restart time
+get_service_last_restart_time() {
+    local service="$1"
+    local state_value=$(jq -r ".services.\"${service}\"" "$STATE_FILE" 2>/dev/null)
+
+    if echo "$state_value" | jq -e 'type == "object"' > /dev/null 2>&1; then
+        echo "$state_value" | jq -r '.last_restart_time // 0'
+    else
+        echo "0"
+    fi
+}
+
+# Update service restart state
+update_service_restart_state() {
+    local service="$1"
+    local restart_attempted="$2"
+    local temp_file=$(mktemp)
+    local timestamp=$(date +%s)
+
+    # Ensure service has object format
+    local existing=$(jq -r ".services.\"${service}\"" "$STATE_FILE" 2>/dev/null)
+
+    if ! echo "$existing" | jq -e 'type == "object"' > /dev/null 2>&1; then
+        # Migrate to object format first
+        local state=$(get_previous_state "$service")
+        jq ".services.\"${service}\" = {\"state\": \"${state}\", \"last_state_change\": ${timestamp}, \"restart_attempted\": false, \"last_restart_time\": 0}" "$STATE_FILE" > "$temp_file"
+        mv "$temp_file" "$STATE_FILE"
+        temp_file=$(mktemp)
+    fi
+
+    # Update restart fields
+    if [ "$restart_attempted" = "true" ]; then
+        jq ".services.\"${service}\".restart_attempted = true | .services.\"${service}\".last_restart_time = ${timestamp}" "$STATE_FILE" > "$temp_file"
+    else
+        jq ".services.\"${service}\".restart_attempted = false" "$STATE_FILE" > "$temp_file"
+    fi
+
+    mv "$temp_file" "$STATE_FILE"
+}
+
+# Check if restart cooldown has expired
+check_restart_cooldown() {
+    local service="$1"
+    local last_restart=$(get_service_last_restart_time "$service")
+    local current_time=$(date +%s)
+    local time_diff=$((current_time - last_restart))
+
+    if [ "$last_restart" -eq 0 ]; then
+        # Never restarted before
+        return 0
+    fi
+
+    if [ "$time_diff" -lt "$RESTART_COOLDOWN" ]; then
+        log "INFO" "Restart cooldown active for ${service} (${time_diff}s since last restart, cooldown: ${RESTART_COOLDOWN}s)"
+        return 1
+    fi
+
+    return 0
 }
 
 # Get last alert timestamp
@@ -142,6 +250,122 @@ check_alert_cooldown() {
         return 1
     fi
     return 0
+}
+
+# Restart a service
+restart_service() {
+    local service="$1"
+    local container_name="$2"
+
+    log "INFO" "Attempting to restart service: $service (container: $container_name)"
+
+    # Execute Docker restart command
+    if docker restart "$container_name" >> "$LOG_FILE" 2>&1; then
+        log "INFO" "Successfully restarted container: $container_name"
+        return 0
+    else
+        log "ERROR" "Failed to restart container: $container_name"
+        return 1
+    fi
+}
+
+# Send restart-specific Discord alert
+send_restart_alert() {
+    local alert_type="$1"  # restart_attempt, restart_success, restart_failed
+    local service="$2"
+    local prev_state="$3"
+    local current_state="$4"
+
+    # Check if Discord webhook is configured
+    if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+        log "WARN" "Discord webhook not configured. Skipping restart alert"
+        return 0
+    fi
+
+    local subject=""
+    local body=""
+    local color=""
+
+    case "$alert_type" in
+        restart_attempt)
+            subject="[ACTION] Media Stack: Restarting Failed Service"
+            body="🔄 Service **${service}** has failed and is being restarted automatically.
+
+**Status:** ${prev_state} → ${current_state}
+**Action:** Attempting automatic restart...
+**Next Check:** ~5 minutes
+
+The system will verify health status after restart and notify you of the result."
+            color="$COLOR_WARNING"
+            ;;
+        restart_success)
+            subject="[RESOLVED] Media Stack: Service Recovered"
+            body="✅ Service **${service}** has recovered after automatic restart.
+
+**Previous:** ${prev_state}
+**Current:** ${current_state}
+**Recovery Time:** ~5 minutes
+
+No further action required."
+            color="$COLOR_RECOVERY"
+            ;;
+        restart_failed)
+            subject="[ALERT] Media Stack: Restart Failed"
+            body="🔴 Service **${service}** remains unhealthy after automatic restart attempt.
+
+**Status:** Still ${current_state}
+**Restart Attempted:** Yes
+**Manual Action Required**
+
+**Troubleshooting:**
+\`\`\`bash
+# Check logs
+docker compose logs -f ${service}
+
+# Manual restart
+docker compose restart ${service}
+
+# Check service status
+docker compose ps ${service}
+\`\`\`"
+            color="$COLOR_FAILURE"
+            ;;
+        *)
+            log "ERROR" "Unknown restart alert type: $alert_type"
+            return 1
+            ;;
+    esac
+
+    # Escape JSON special characters in body
+    local escaped_body=$(echo "$body" | jq -Rs .)
+
+    # Create Discord embed JSON
+    local discord_payload=$(cat <<EOF
+{
+  "username": "Media Stack Monitor",
+  "avatar_url": "https://cdn-icons-png.flaticon.com/512/2103/2103633.png",
+  "embeds": [{
+    "title": "${subject}",
+    "description": ${escaped_body},
+    "color": ${color},
+    "footer": {
+      "text": "Media Stack Health Monitor - Auto-Restart"
+    },
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  }]
+}
+EOF
+)
+
+    # Send to Discord webhook
+    log "INFO" "Sending restart alert to Discord: $alert_type for $service"
+    if curl -s -H "Content-Type: application/json" \
+        -d "$discord_payload" \
+        "$DISCORD_WEBHOOK_URL" > /dev/null; then
+        log "INFO" "Restart alert sent successfully to Discord"
+    else
+        log "ERROR" "Failed to send restart alert to Discord"
+    fi
 }
 
 # Send Discord alert
@@ -223,6 +447,7 @@ check_docker_health() {
         local running_status=$(docker inspect --format='{{.State.Running}}' "$container_name" 2>/dev/null || echo "false")
         local previous_state=$(get_previous_state "$service")
         local current_state="unknown"
+        local restart_attempted=$(get_service_restart_attempted "$service")
 
         # Determine current state
         if [ "$running_status" != "true" ]; then
@@ -242,20 +467,55 @@ check_docker_health() {
             log "INFO" "Service $service has no healthcheck (assumed healthy)"
         fi
 
-        # Detect state changes
+        # Detect state changes and handle restart logic
         if [ "$previous_state" != "unknown" ] && [ "$previous_state" != "$current_state" ]; then
             # State changed
             if [ "$current_state" = "healthy" ] || [ "$current_state" = "no-healthcheck" ]; then
                 # Service recovered
                 if [ "$previous_state" = "stopped" ] || [ "$previous_state" = "unhealthy" ]; then
-                    recovered_services+=("$service ($previous_state → $current_state)")
-                    log "INFO" "Service $service recovered: $previous_state → $current_state"
+                    # Check if this recovery was after a restart attempt
+                    if [ "$restart_attempted" = "true" ]; then
+                        # Recovery after restart
+                        send_restart_alert "restart_success" "$service" "$previous_state" "$current_state"
+                        log "INFO" "Service $service recovered after restart: $previous_state → $current_state"
+                    else
+                        # Natural recovery (no restart)
+                        recovered_services+=("$service ($previous_state → $current_state)")
+                        log "INFO" "Service $service recovered naturally: $previous_state → $current_state"
+                    fi
+                    # Reset restart attempted flag
+                    update_service_restart_state "$service" "false"
                 fi
             elif [ "$current_state" = "stopped" ] || [ "$current_state" = "unhealthy" ]; then
                 # Service failed
                 if [ "$previous_state" = "healthy" ] || [ "$previous_state" = "no-healthcheck" ]; then
-                    failed_services+=("$service ($previous_state → $current_state)")
-                    log "ERROR" "Service $service failed: $previous_state → $current_state"
+                    # First failure - attempt restart if enabled and cooldown expired
+                    if [ "$AUTO_RESTART_ENABLED" = "true" ] && [ "$restart_attempted" = "false" ] && check_restart_cooldown "$service"; then
+                        # Attempt automatic restart
+                        log "INFO" "Service $service failed (first time): $previous_state → $current_state. Attempting restart..."
+                        send_restart_alert "restart_attempt" "$service" "$previous_state" "$current_state"
+
+                        # Execute restart
+                        if restart_service "$service" "$container_name"; then
+                            # Mark restart as attempted
+                            update_service_restart_state "$service" "true"
+                            log "INFO" "Restart initiated for $service. Will verify on next check cycle."
+                        else
+                            # Restart command failed
+                            log "ERROR" "Failed to execute restart for $service"
+                            send_restart_alert "restart_failed" "$service" "$previous_state" "$current_state"
+                            update_service_restart_state "$service" "true"
+                        fi
+                    elif [ "$restart_attempted" = "true" ]; then
+                        # Second failure - restart already attempted and failed
+                        failed_services+=("$service ($previous_state → $current_state)")
+                        send_restart_alert "restart_failed" "$service" "$previous_state" "$current_state"
+                        log "ERROR" "Service $service still failed after restart: $previous_state → $current_state"
+                    else
+                        # Auto-restart disabled or cooldown active
+                        failed_services+=("$service ($previous_state → $current_state)")
+                        log "ERROR" "Service $service failed: $previous_state → $current_state (restart disabled or on cooldown)"
+                    fi
                 fi
             fi
         fi
@@ -264,7 +524,7 @@ check_docker_health() {
         update_service_state "$service" "$current_state"
     done
 
-    # Send failure alerts
+    # Send failure alerts (for services where restart wasn't attempted or auto-restart is disabled)
     if [ ${#failed_services[@]} -gt 0 ]; then
         local alert_body="🔴 The following services have failed:
 
@@ -282,7 +542,7 @@ docker compose restart [service-name]
         send_alert "[ALERT] Media Stack: Services Failed" "$alert_body" "$COLOR_FAILURE" "failure"
     fi
 
-    # Send recovery alerts
+    # Send recovery alerts (for natural recoveries without restart)
     if [ ${#recovered_services[@]} -gt 0 ]; then
         local alert_body="✅ The following services have recovered:
 
