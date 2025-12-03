@@ -353,18 +353,19 @@ services:
     container_name: homarr-dashboard
     environment:
       - TZ=${TZ:-America/Chicago}
+      - SECRET_ENCRYPTION_KEY=${HOMARR_SECRET_ENCRYPTION_KEY}
+      - HOSTNAME=0.0.0.0
     ports:
-      - 7575:7575
+      - 7575:3000
     volumes:
-      - ./configs/homarr/configs:/app/data/configs
-      - ./configs/homarr/icons:/app/public/icons
-      - ./configs/homarr/data:/data
+      - ./configs/homarr/v1-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.homarr.rule=Host(`home.${DOMAIN}`)"
       - "traefik.http.routers.homarr.entrypoints=websecure"
       - "traefik.http.routers.homarr.tls.certresolver=letsencrypt"
-      - "traefik.http.services.homarr.loadbalancer.server.port=7575"
+      - "traefik.http.services.homarr.loadbalancer.server.port=3000"
     deploy:
       resources:
         limits:
@@ -374,7 +375,7 @@ services:
           cpus: '0.1'
           memory: 128M
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7575"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3000 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
