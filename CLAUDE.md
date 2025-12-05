@@ -467,14 +467,18 @@ This setup follows TRaSH Guides best practices:
 - Verify file permissions: Compressor should preserve ownership
 - Check watch history: Should be preserved if filename unchanged
 
-### VPN Connectivity Alerts (False Positives)
-- Symptom: Discord alerts "Unable to determine VPN public IP" but VPN is working
-- Cause: Gluetun uses DNS-over-TLS (port 853) which can timeout through VPN
-- Check gluetun logs: `docker compose logs gluetun | grep -i "dns\|timeout"`
-- Verify VPN working: `docker exec gluetun wget -qO- https://api.ipify.org`
-- Health monitor now retries 3 times before alerting (as of commit eb65747)
-- If alerts persist: Consider switching gluetun to plain DNS (see docker-compose.yml DNS_UPSTREAM_RESOLVER_TYPE)
-- Gluetun container may show as "unhealthy" during DNS timeouts but VPN tunnel still works
+### VPN Connectivity Alerts - Now Auto-Resolved
+- **Status:** ✅ Automated recovery enabled
+- **Symptom:** Discord alerts "[ACTION] Media Stack: Restarting VPN" followed by "[RESOLVED] Media Stack: VPN Restarted"
+- **Cause:** DNS-over-TLS timeouts through VPN tunnel (especially with routing conflicts when host also uses VPN)
+- **Solution:** Health monitor automatically restarts gluetun after 2 consecutive failures (~10 minutes)
+- **Configuration:** DNS-over-TLS disabled (`DOT=off`), plain DNS through encrypted VPN tunnel
+- **Manual Check:** `docker exec gluetun-vpn wget -qO- http://api.ipify.org` (note: HTTP works better than HTTPS with routing conflicts)
+- **Expected Behavior:** VPN auto-restarts should happen infrequently (less than once per day)
+- **If Frequent Restarts:** Check if host VPN is causing excessive latency, consider disabling host VPN or increasing timeout values
+- **macOS Users:** If running NordVPN on host + gluetun in Docker, routing conflicts can cause alerts
+- **Not Double-VPN:** Traffic is NOT going through two VPN layers despite both running
+- **Solution:** Auto-recovery handles this automatically, or temporarily disable host VPN when using media stack
 
 ## Access URLs
 
@@ -671,6 +675,58 @@ docker compose up -d gluetun
 # Recreate Deluge to reconnect to new gluetun network namespace:
 docker compose up -d deluge
 ```
+
+**VPN Auto-Recovery (Automated Restart on DNS Failures):**
+The health monitor automatically detects and recovers from VPN DNS connectivity issues:
+
+- **Monitoring:** Checks VPN public IP every 5 minutes using HTTPS (with HTTP fallback)
+- **Failure Detection:** Tracks consecutive DNS failures (requires 2 failures = ~10 minutes)
+- **Auto-Restart:** Automatically restarts gluetun when DNS-over-TLS times out persistently
+- **Discord Alerts:** Sends notifications for restart attempts and successful recovery
+- **Cooldown:** 15-minute cooldown between restarts to prevent flapping
+- **Grace Period:** Skips checks for 60 seconds after restart to allow container stabilization
+
+**DNS Configuration:**
+- DNS-over-TLS disabled (`DOT=off`) to prevent timeout issues through VPN tunnel
+- Uses plain DNS (1.1.1.1) which is still encrypted by the Wireguard tunnel
+- Public IP checks reduced to every 24 hours (was 12h) to minimize HTTPS timeouts
+
+**Double VPN Considerations:**
+If the Docker host is also running a VPN, this creates a nested VPN scenario (host VPN → gluetun VPN). This can cause:
+- Increased latency on HTTPS connections
+- TLS handshake timeouts for external API checks
+- The auto-recovery system handles this by using HTTP fallback and automatic restarts
+
+**Manual VPN Restart:**
+```bash
+# If auto-restart fails or is disabled, manually restart:
+docker compose restart gluetun
+docker compose restart deluge
+```
+
+### macOS Host VPN Considerations
+
+**Setup:** macOS host running NordVPN + Docker Desktop with gluetun
+- Single NordVPN subscription used for both host and Docker containers
+- Host NordVPN protects Mac system traffic (browsing, apps)
+- Gluetun provides independent VPN tunnel for Docker containers only
+- Docker traffic goes directly to gluetun, NOT through host VPN
+
+**Not Double-VPN:** Despite both VPNs running, traffic is NOT going through two VPN layers:
+- Host applications → NordVPN → Internet
+- Docker containers → Gluetun → Internet
+- Clean separation via Docker network isolation
+
+**Routing Conflicts:**
+The occasional VPN connectivity alerts are caused by routing conflicts between host NordVPN and Docker networks, not double-encryption. The auto-recovery system handles these automatically.
+
+**NordVPN Split Tunneling Limitation:**
+NordVPN does not support split tunneling on macOS due to Apple's security architecture. The current gluetun setup is the recommended approach for macOS users.
+
+**If Restarts Too Frequent (> 2/day):**
+1. Temporarily disable host NordVPN when running media stack
+2. Switch to geographically closer NordVPN server
+3. Wait until stack moves to dedicated server (no host VPN needed)
 
 ## Important Notes
 

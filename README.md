@@ -216,6 +216,25 @@ These are created automatically on first run. Find them in each service's web UI
 - **Notifications**: Settings → Notification Agents → Add agent
 - **Mobile Access**: Download Tautulli Remote app (iOS/Android)
 
+### VPN Configuration
+
+This stack uses **NordVPN via gluetun** for torrent traffic protection. Key features:
+
+- **Auto-Recovery**: Health monitor automatically restarts VPN on DNS failures
+- **Kill Switch**: Deluge traffic stops if VPN disconnects (network isolation)
+- **Private Tracker Safe**: DHT/LSD/PEX disabled for TorrentDay compliance
+
+**macOS Users**: If running NordVPN on host + gluetun in Docker:
+- Traffic is NOT going through two VPN layers (clean separation via Docker networks)
+- Occasional routing conflicts may trigger auto-restarts (< 1/day expected)
+- See [CLAUDE.md](CLAUDE.md#macos-host-vpn-considerations) for details
+
+**For Complete VPN Documentation**, see [CLAUDE.md](CLAUDE.md):
+- VPN auto-recovery system (automated restart on failures)
+- macOS host VPN considerations
+- Manual troubleshooting steps
+- DNS configuration details
+
 ## Workflow
 
 ### Movie/TV Show Automation

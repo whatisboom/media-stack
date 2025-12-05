@@ -88,6 +88,8 @@ services:
       - FIREWALL_OUTBOUND_SUBNETS=172.16.0.0/12  # Allow all Docker bridge networks
       - HTTPPROXY=off
       - SHADOWSOCKS=off
+      - DOT=off  # Disable DNS-over-TLS (prevents timeout issues through VPN)
+      - PUBLICIP_PERIOD=24h  # Reduce frequency of public IP checks (default: 12h)
     deploy:
       resources:
         limits:

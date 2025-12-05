@@ -84,7 +84,9 @@ initialize_state() {
   "vpn": {
     "last_ip": "",
     "last_country": "",
-    "last_check": ""
+    "last_check": "",
+    "consecutive_failures": 0,
+    "last_restart_time": 0
   },
   "disk": {
     "last_available_gb": 0,
@@ -103,6 +105,14 @@ initialize_state() {
   }
 }
 EOF
+    else
+        # Migrate existing state file if needed (add missing VPN fields)
+        local temp_file=$(mktemp)
+        if ! jq -e '.vpn.consecutive_failures' "$STATE_FILE" > /dev/null 2>&1; then
+            log "INFO" "Migrating state file to add VPN failure tracking"
+            jq '.vpn.consecutive_failures = 0 | .vpn.last_restart_time = 0' "$STATE_FILE" > "$temp_file"
+            mv "$temp_file" "$STATE_FILE"
+        fi
     fi
 }
 
@@ -419,6 +429,141 @@ EOF
     fi
 }
 
+# Get VPN failure counter
+get_vpn_failure_count() {
+    jq -r '.vpn.consecutive_failures // 0' "$STATE_FILE"
+}
+
+# Increment VPN failure counter
+increment_vpn_failure_counter() {
+    local temp_file=$(mktemp)
+    local current_count=$(get_vpn_failure_count)
+    local new_count=$((current_count + 1))
+    jq ".vpn.consecutive_failures = ${new_count}" "$STATE_FILE" > "$temp_file"
+    mv "$temp_file" "$STATE_FILE"
+    echo "$new_count"
+}
+
+# Reset VPN failure counter
+reset_vpn_failure_counter() {
+    local temp_file=$(mktemp)
+    jq '.vpn.consecutive_failures = 0' "$STATE_FILE" > "$temp_file"
+    mv "$temp_file" "$STATE_FILE"
+}
+
+# Get VPN last restart time
+get_vpn_last_restart_time() {
+    jq -r '.vpn.last_restart_time // 0' "$STATE_FILE"
+}
+
+# Update VPN last restart time
+update_vpn_last_restart_time() {
+    local temp_file=$(mktemp)
+    local timestamp=$(date +%s)
+    jq ".vpn.last_restart_time = ${timestamp}" "$STATE_FILE" > "$temp_file"
+    mv "$temp_file" "$STATE_FILE"
+}
+
+# Check if VPN restart cooldown has expired
+check_vpn_restart_cooldown() {
+    local last_restart=$(get_vpn_last_restart_time)
+    local current_time=$(date +%s)
+    local time_diff=$((current_time - last_restart))
+
+    if [ "$last_restart" -eq 0 ]; then
+        return 0
+    fi
+
+    if [ "$time_diff" -lt "$RESTART_COOLDOWN" ]; then
+        log "INFO" "VPN restart cooldown active (${time_diff}s since last restart, cooldown: ${RESTART_COOLDOWN}s)"
+        return 1
+    fi
+
+    return 0
+}
+
+# Handle VPN DNS failure with automatic restart
+handle_vpn_dns_failure() {
+    # Increment failure counter
+    local failure_count=$(increment_vpn_failure_counter)
+
+    log "WARN" "VPN DNS failure detected. Consecutive failures: $failure_count"
+
+    # Require 2 consecutive failures before restarting (avoids flapping)
+    if [ "$failure_count" -lt 2 ]; then
+        log "INFO" "Waiting for next check cycle to confirm persistent DNS failure"
+        return 1
+    fi
+
+    # Check if auto-restart is enabled
+    if [ "$AUTO_RESTART_ENABLED" != "true" ]; then
+        log "INFO" "Auto-restart disabled, skipping VPN restart"
+        return 1
+    fi
+
+    # Check restart cooldown
+    if ! check_vpn_restart_cooldown; then
+        return 1
+    fi
+
+    # Restart gluetun to fix DNS-over-TLS issues
+    log "INFO" "Restarting gluetun VPN container to resolve DNS-over-TLS failures..."
+
+    send_alert "[ACTION] Media Stack: Restarting VPN" \
+        "🔄 VPN DNS-over-TLS has failed $failure_count consecutive times.
+
+**Action:** Restarting gluetun container to reinitialize DNS...
+**VPN Tunnel:** Still active (downloads protected)
+**Next Check:** ~5 minutes
+
+This is a known issue with DNS-over-TLS timeouts through VPN." \
+        "$COLOR_WARNING" \
+        "failure"
+
+    if restart_service "gluetun" "gluetun-vpn"; then
+        update_vpn_last_restart_time
+        reset_vpn_failure_counter
+
+        send_alert "[RESOLVED] Media Stack: VPN Restarted" \
+            "✅ VPN container has been restarted successfully.
+
+**Status:** DNS-over-TLS reinitialized
+**Downloads:** Protection maintained throughout restart
+**Next Check:** Monitoring VPN connectivity...
+
+The health monitor will verify connectivity on the next cycle." \
+            "$COLOR_RECOVERY" \
+            "recovery"
+
+        log "INFO" "VPN restart completed successfully"
+        return 0
+    else
+        log "ERROR" "Failed to restart VPN container"
+
+        send_alert "[ALERT] Media Stack: VPN Restart Failed" \
+            "🔴 Failed to restart gluetun VPN container.
+
+**Status:** Manual intervention required
+**Risk:** Downloads may not be protected
+
+**Troubleshooting:**
+\`\`\`bash
+# Check gluetun status
+docker compose ps gluetun
+
+# View logs
+docker compose logs gluetun --tail=50
+
+# Manual restart
+docker compose restart gluetun
+\`\`\`" \
+            "$COLOR_FAILURE" \
+            "failure"
+
+        return 1
+    fi
+}
+
 # Check Docker service health
 check_docker_health() {
     log "INFO" "Checking Docker service health..."
@@ -583,7 +728,15 @@ check_vpn() {
 
     for attempt in $(seq 1 $max_retries); do
         log "INFO" "VPN IP check attempt $attempt/$max_retries"
-        vpn_ip=$(docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "")
+
+        # Try primary method (HTTPS)
+        vpn_ip=$(timeout 10 docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "")
+
+        # Fallback to HTTP if HTTPS times out (common in double VPN scenarios)
+        if [ -z "$vpn_ip" ]; then
+            log "INFO" "HTTPS check failed, trying HTTP fallback..."
+            vpn_ip=$(timeout 10 docker exec gluetun-vpn wget -qO- http://api.ipify.org 2>/dev/null || echo "")
+        fi
 
         if [ -n "$vpn_ip" ]; then
             break
@@ -597,14 +750,24 @@ check_vpn() {
 
     if [ -z "$vpn_ip" ]; then
         log "ERROR" "Failed to get VPN public IP after $max_retries attempts"
+
+        # Check if this is a persistent DNS issue requiring restart
+        if handle_vpn_dns_failure; then
+            log "INFO" "VPN restart initiated due to DNS failure"
+            return 1
+        fi
+
         send_alert "[ALERT] Media Stack: VPN Connectivity Issue" "Unable to determine VPN public IP after $max_retries attempts. The VPN connection may be down or DNS is failing." "$COLOR_FAILURE" "failure"
         return 1
     fi
 
+    # Reset VPN failure counter on success
+    reset_vpn_failure_counter
+
     log "INFO" "VPN is connected. Public IP: $vpn_ip"
 
     # Optional: Check if IP is a NordVPN IP (basic check)
-    local vpn_country=$(docker exec gluetun-vpn wget -qO- https://ipinfo.io/country 2>/dev/null || echo "")
+    local vpn_country=$(timeout 10 docker exec gluetun-vpn wget -qO- https://ipinfo.io/country 2>/dev/null || echo "")
     if [ -n "$vpn_country" ]; then
         log "INFO" "VPN location: $vpn_country"
     fi
@@ -770,12 +933,22 @@ get_remote_image_digest() {
 
 # Check for VPN IP leaks
 check_vpn_leak() {
+    # Skip leak check if VPN was recently restarted (give it time to stabilize)
+    local last_restart=$(get_vpn_last_restart_time)
+    local current_time=$(date +%s)
+    local time_since_restart=$((current_time - last_restart))
+
+    if [ "$last_restart" -gt 0 ] && [ "$time_since_restart" -lt "$RESTART_GRACE_PERIOD" ]; then
+        log "INFO" "Skipping VPN leak check - container recently restarted (${time_since_restart}s ago)"
+        return 0
+    fi
+
     # Get VPN's public IP (from gluetun container)
-    local vpn_ip=$(docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
+    local vpn_ip=$(timeout 10 docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
 
     # Get Deluge's public IP (should be same as VPN)
     # Note: Deluge shares gluetun's network, so both should report same IP
-    local deluge_ip=$(docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
+    local deluge_ip=$(timeout 10 docker exec gluetun-vpn wget -qO- https://api.ipify.org 2>/dev/null || echo "unavailable")
 
     if [ "$vpn_ip" = "unavailable" ] || [ "$deluge_ip" = "unavailable" ]; then
         log "WARN" "VPN IP check failed - could not retrieve IPs"
