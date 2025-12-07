@@ -8,6 +8,18 @@
 
 set -euo pipefail
 
+# Ensure script runs from /workspace directory
+WORKSPACE_DIR="/workspace"
+if [ ! -d "$WORKSPACE_DIR" ]; then
+    echo "Error: $WORKSPACE_DIR does not exist" >&2
+    exit 1
+fi
+
+cd "$WORKSPACE_DIR" || {
+    echo "Error: Cannot change to $WORKSPACE_DIR" >&2
+    exit 1
+}
+
 # Configuration
 BACKUP_DIR="./backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
