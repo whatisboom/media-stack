@@ -469,6 +469,7 @@ services:
       - /Volumes/Samsung_T5:/data:ro
       - ./logs:/logs
     environment:
+      - TZ=${TZ:-America/Chicago}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - DISK_SPACE_THRESHOLD=${DISK_SPACE_THRESHOLD:-10}
       - ALERT_COOLDOWN=${ALERT_COOLDOWN:-3600}
@@ -547,15 +548,14 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  compressor:
-    build: ./compressor
-    container_name: compressor-media-encoder
-    profiles:
-      - tools
+  utilities:
+    build: ./utilities
+    container_name: utilities-daemon
     volumes:
       - /Volumes/Samsung_T5:/data
       - ./logs:/logs
     environment:
+      # Compressor environment variables
       - DOWNLOADS_DIR=/data/Downloads
       - MOVIES_DIR=/data/Movies
       - SHOWS_DIR=/data/Shows
@@ -569,6 +569,14 @@ services:
       - DELUGE_PORT=${DELUGE_PORT:-8112}
       - DELUGE_PASSWORD=${DELUGE_PASSWORD}
       - TZ=${TZ:-America/Chicago}
+
+      # MCP-Arr environment variables
+      - RADARR_URL=http://radarr:7878
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - SONARR_URL=http://sonarr:8989
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - PROWLARR_URL=http://prowlarr:9696
+      - PROWLARR_API_KEY=${PROWLARR_API_KEY}
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
     deploy:
@@ -577,11 +585,19 @@ services:
           cpus: '4.0'
           memory: 8G
         reservations:
-          cpus: '1.0'
-          memory: 2G
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "crond"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     networks:
-      - media
-      - download  # Access to gluetun for Deluge API
+      - media       # Access to Plex for compressor
+      - download    # Access to Deluge for compressor
+      - automation  # Access to *arr services for MCP
+    restart: unless-stopped
     logging:
       driver: "json-file"
       options:

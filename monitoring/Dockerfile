@@ -1,11 +1,16 @@
 FROM alpine:latest
 
-# Install required packages
+# Set timezone (will be overridden by TZ env var from docker-compose)
+ARG TZ=America/Chicago
+ENV TZ=${TZ}
+
+# Install required packages including tzdata
 RUN apk add --no-cache \
     bash \
     curl \
     jq \
-    docker-cli
+    docker-cli \
+    tzdata
 
 # Copy monitoring script
 COPY health-monitor.sh /usr/local/bin/health-monitor.sh

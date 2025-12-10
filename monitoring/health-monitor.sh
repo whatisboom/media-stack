@@ -524,8 +524,20 @@ This is a known issue with DNS-over-TLS timeouts through VPN." \
         update_vpn_last_restart_time
         reset_vpn_failure_counter
 
+        # Also restart Deluge since it shares gluetun's network namespace
+        log "INFO" "Restarting Deluge to reconnect to VPN network namespace..."
+        local deluge_restart_status="✅ Reconnected"
+        if ! restart_service "deluge" "deluge-torrent-client"; then
+            log "WARN" "Failed to restart Deluge after VPN restart"
+            deluge_restart_status="⚠️ Failed to restart (manual restart may be needed)"
+        fi
+
         send_alert "[RESOLVED] Media Stack: VPN Restarted" \
             "✅ VPN container has been restarted successfully.
+
+**Services Restarted:**
+- gluetun (VPN): ✅ Reinitialized
+- deluge (torrent client): ${deluge_restart_status}
 
 **Status:** DNS-over-TLS reinitialized
 **Downloads:** Protection maintained throughout restart
@@ -580,9 +592,10 @@ check_docker_health() {
         ["homarr"]="homarr-dashboard"
         ["deluge"]="deluge-torrent-client"
         ["fail2ban"]="fail2ban-intrusion-prevention"
+        ["utilities"]="utilities-daemon"
     )
 
-    local services=(traefik gluetun plex radarr sonarr prowlarr overseerr homarr deluge fail2ban)
+    local services=(traefik gluetun plex radarr sonarr prowlarr overseerr homarr deluge fail2ban utilities)
     local failed_services=()
     local recovered_services=()
 
@@ -970,9 +983,75 @@ check_vpn_leak() {
     return 0
 }
 
+# Extract version tag from running container
+# Usage: get_image_tag "radarr"
+# Returns: "6.0.4"
+get_image_tag() {
+    local service_name="$1"
+    # Map service name to container name using the container_names array
+    local container_name="${container_names[$service_name]}"
+
+    # Get the image tag from running container
+    docker inspect "$container_name" 2>/dev/null | jq -r '.[0].Config.Image' | cut -d: -f2 || echo ""
+}
+
+# Parse semantic version into major.minor.patch
+# Usage: parse_version "6.0.4"
+# Returns: "6 0 4" (space-separated)
+parse_version() {
+    local version="$1"
+    # Remove 'v' prefix if present (e.g., v3.6.2 → 3.6.2)
+    version="${version#v}"
+
+    # Extract major.minor.patch
+    local major=$(echo "$version" | cut -d. -f1)
+    local minor=$(echo "$version" | cut -d. -f2)
+    local patch=$(echo "$version" | cut -d. -f3 | cut -d- -f1)  # Handle versions like 1.42.2.10156-f737b826c
+
+    echo "$major $minor $patch"
+}
+
+# Compare versions and return true if minor version changed
+# Usage: is_minor_version_update "6.0.4" "6.1.0"
+# Returns: 0 (true) if minor/major changed, 1 (false) if only patch changed
+is_minor_version_update() {
+    local local_version="$1"
+    local remote_version="$2"
+
+    # Parse versions
+    read local_major local_minor local_patch <<< $(parse_version "$local_version")
+    read remote_major remote_minor remote_patch <<< $(parse_version "$remote_version")
+
+    # Check if major or minor version changed
+    if [ "$local_major" != "$remote_major" ] || [ "$local_minor" != "$remote_minor" ]; then
+        return 0  # True - notify
+    else
+        return 1  # False - skip notification
+    fi
+}
+
 # Check for image updates
 check_image_updates() {
     log "INFO" "Checking for Docker image updates..."
+
+    # Map service names to actual container names
+    declare -A container_names=(
+        ["traefik"]="traefik-reverse-proxy"
+        ["gluetun"]="gluetun-vpn"
+        ["plex"]="plex-media-server"
+        ["radarr"]="radarr-movie-management"
+        ["sonarr"]="sonarr-tv-management"
+        ["prowlarr"]="prowlarr-indexer-manager"
+        ["overseerr"]="overseerr-request-manager"
+        ["homarr"]="homarr-dashboard"
+        ["deluge"]="deluge-torrent-client"
+        ["fail2ban"]="fail2ban-intrusion-prevention"
+        ["utilities"]="utilities-daemon"
+        ["bazarr"]="bazarr-subtitle-manager"
+        ["recyclarr"]="recyclarr-config-manager"
+        ["watchtower"]="watchtower-update-monitor"
+        ["tautulli"]="tautulli-plex-monitoring"
+    )
 
     # Define services and their images
     declare -A services_images=(
@@ -1021,32 +1100,43 @@ check_image_updates() {
         # Truncate remote digest to same length for comparison
         local new_digest=$(echo "$remote_digest" | cut -c1-12)
 
-        # Compare digests
+        # Compare digests to detect any change
         if [ "$local_digest" != "$new_digest" ]; then
-            log "INFO" "Update available for $service: $local_digest → $new_digest"
-            updates_found=$((updates_found + 1))
+            # Get version tags for semantic comparison
+            local local_tag=$(get_image_tag "$service")
+            local remote_tag=$(echo "$image" | cut -d: -f2)
 
-            # Fetch changelog based on registry type
-            local changelog=""
-            case "$registry" in
-                linuxserver)
-                    changelog=$(fetch_linuxserver_changelog "$metadata")
-                    ;;
-                github)
-                    changelog=$(fetch_github_changelog "$metadata")
-                    ;;
-                dockerhub)
-                    changelog=$(fetch_generic_changelog "$image" "$metadata")
-                    ;;
-            esac
+            log "INFO" "Image change detected for $service: $local_tag → $remote_tag"
 
-            # Build JSON entry (escaping for jq)
-            if [ "$updates_found" -gt 1 ]; then
-                updates_json="$updates_json,"
+            # Check if this is a minor/major version update
+            if is_minor_version_update "$local_tag" "$remote_tag"; then
+                log "INFO" "Minor/major version update for $service: $local_tag → $remote_tag"
+                updates_found=$((updates_found + 1))
+
+                # Fetch changelog based on registry type
+                local changelog=""
+                case "$registry" in
+                    linuxserver)
+                        changelog=$(fetch_linuxserver_changelog "$metadata")
+                        ;;
+                    github)
+                        changelog=$(fetch_github_changelog "$metadata")
+                        ;;
+                    dockerhub)
+                        changelog=$(fetch_generic_changelog "$image" "$metadata")
+                        ;;
+                esac
+
+                # Build JSON entry (escaping for jq)
+                if [ "$updates_found" -gt 1 ]; then
+                    updates_json="$updates_json,"
+                fi
+
+                local escaped_changelog=$(echo "$changelog" | jq -Rs .)
+                updates_json="$updates_json\"$service\":{\"image\":\"$image\",\"current\":\"$local_tag\",\"new\":\"$remote_tag\",\"changelog\":$escaped_changelog}"
+            else
+                log "INFO" "Skipping patch-only update for $service: $local_tag → $remote_tag"
             fi
-
-            local escaped_changelog=$(echo "$changelog" | jq -Rs .)
-            updates_json="$updates_json\"$service\":{\"image\":\"$image\",\"current\":\"$local_digest\",\"new\":\"$new_digest\",\"changelog\":$escaped_changelog}"
         else
             log "INFO" "No update available for $service"
         fi

@@ -17,6 +17,17 @@ Self-hosted media automation stack built with Docker, configured following [TRaS
 | **Overseerr** | 5055 | Media request management | https://requests.${DOMAIN} (external)<br>http://dev.local:5055 (internal) |
 | **Deluge** | 8112 | BitTorrent client (via gluetun) | http://dev.local:8112 |
 
+## Features
+
+- ✅ **VPN-protected torrenting** - NordVPN via gluetun with kill switch
+- ✅ **TRaSH Guides compliant** - Hardlinks, proper paths, quality profiles
+- ✅ **Private tracker safe** - DHT/LSD/PEX disabled
+- ✅ **Centralized indexer management** - Prowlarr auto-syncs to Radarr/Sonarr
+- ✅ **Reverse proxy with automatic HTTPS** - Traefik + Let's Encrypt
+- ✅ **Automated monitoring & alerts** - Discord notifications for health issues
+- ✅ **Media compression** - HEVC encoding for 40-50% space savings
+- ✅ **AI assistant integration** - Claude Code integration via MCP for natural language control
+
 ## Quick Start
 
 ### Initial Setup

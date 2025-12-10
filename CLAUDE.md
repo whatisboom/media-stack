@@ -63,13 +63,23 @@ Overseerr (Requests)
 **Compression & Storage Management Flow:**
 1. Radarr/Sonarr remove torrents from Deluge after seeding goals met (72h OR 2.0 ratio)
 2. Files remain in `/data/Downloads` after torrent removal
-3. Compressor service runs on-demand (manual or scheduled via host cron) to find orphaned video files
+3. Compressor service runs on-demand (manual or cron via utilities container) to find orphaned video files
 4. For each file in Downloads, compressor finds matching file in Movies/Shows
 5. Compressor encodes to HEVC (x265) with CRF 23 for 40-50% size reduction
 6. Atomically replaces original file in media library (preserves Plex metadata)
 7. Deletes original from `/data/Downloads`
 8. Triggers Plex library scan
 9. Sends Discord notification with space saved
+
+**AI Assistant Integration Flow (MCP-Arr):**
+1. Claude Code connects to utilities container via stdio (`docker exec -i utilities-daemon mcp-arr`)
+2. MCP server queries Radarr/Sonarr/Prowlarr APIs via automation network
+3. Natural language commands enable library management:
+   - Query: "List all movies in Radarr"
+   - Add: "Add The Matrix to Radarr in 4K quality"
+   - Monitor: "Show me download progress for all TV shows"
+   - Configure: "What quality profiles are configured in Sonarr?"
+4. Container remains running (persistent utilities daemon)
 
 ### Volume Architecture
 
@@ -228,13 +238,14 @@ docker exec gluetun wget -qO- http://ipinfo.io/country
 docker compose logs traefik --tail=50
 docker compose logs traefik | grep -i "certificate"
 
-# Run media compression (on-demand, container exits after completion)
-docker compose --profile tools run --rm compressor     # Run compression now
-./scripts/compress-media.sh                            # Alternative: wrapper script
-./scripts/compress-media.sh --dry-run                  # Test without making changes
+# Run media compression (on-demand via utilities container)
+docker exec utilities-daemon python /app/compressor/compressor.py  # Run compression now
+./scripts/compress-media.sh                                         # Alternative: wrapper script
+./scripts/compress-media.sh --dry-run                               # Test without making changes
 
 # Check compression logs
 tail -f logs/compressor.log
+# Note: Scheduled compression runs automatically at 3 AM daily via cron in utilities container
 ```
 
 ## Configuration Management
@@ -727,6 +738,151 @@ NordVPN does not support split tunneling on macOS due to Apple's security archit
 1. Temporarily disable host NordVPN when running media stack
 2. Switch to geographically closer NordVPN server
 3. Wait until stack moves to dedicated server (no host VPN needed)
+
+## AI Assistant Integration (MCP-Arr)
+
+### Overview
+Model Context Protocol (MCP) server enabling Claude Code to manage media automation through natural language. Part of the unified utilities container that also runs media compression.
+
+**Supported Services:**
+- Radarr (movie management)
+- Sonarr (TV show management)
+- Prowlarr (indexer management)
+
+**Note**: Bazarr not supported by mcp-arr package.
+
+### Configuration
+
+**Prerequisites:**
+The utilities container must be running (it starts automatically with the stack):
+```bash
+docker compose ps utilities
+# Expected: STATUS = Up (healthy)
+```
+
+**Configure Claude Code:**
+Add to `~/.config/claude/claude_desktop_config.json` (or `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+```json
+{
+  "mcpServers": {
+    "arr": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "utilities-daemon",
+        "mcp-arr"
+      ]
+    }
+  }
+}
+```
+
+**Restart Claude Desktop** after configuration changes.
+
+### Usage Examples
+
+**Query Libraries:**
+- "How many movies are in Radarr?"
+- "Show me TV shows currently downloading"
+- "What indexers are configured in Prowlarr?"
+- "List all movies added in the last week"
+
+**Add Content:**
+- "Add Breaking Bad to Sonarr"
+- "Add The Matrix (1999) to Radarr in 4K"
+- "Search for Dune Part Two"
+
+**Monitor & Manage:**
+- "Show download queue status"
+- "List upcoming TV releases this week"
+- "What quality profiles are configured in Radarr?"
+- "Show me Radarr system status"
+
+### Architecture
+
+**Communication Flow:**
+```
+Claude Code (Host)
+    ↓ stdio (docker exec -i)
+Utilities Container (persistent)
+    ├─ MCP-Arr (Node.js)
+    │   ↓ HTTP (automation network)
+    │   Radarr/Sonarr/Prowlarr Containers
+    │
+    └─ Compressor (Python + cron)
+        ↓ HTTP (media + download networks)
+        Plex + Deluge Containers
+```
+
+**Network Access:**
+- Utilities container on THREE networks: `automation`, `media`, `download`
+- MCP-Arr uses: `automation` (Radarr, Sonarr, Prowlarr)
+- Compressor uses: `media` (Plex), `download` (Deluge)
+- Consolidated access for all utility functions
+
+**Container Lifecycle:**
+- Persistent daemon (restart: unless-stopped)
+- Starts with main stack: `docker compose up -d`
+- MCP executed on-demand: `docker exec -i utilities-daemon mcp-arr`
+- Compressor runs via cron (3 AM daily) or manually: `docker exec utilities-daemon python /app/compressor/compressor.py`
+- Check status: `docker ps | grep utilities-daemon`
+
+### Troubleshooting
+
+**"Cannot connect to radarr:7878":**
+- Verify utilities container running: `docker compose ps utilities`
+- Check network connectivity: `docker exec utilities-daemon wget -qO- http://radarr:7878/ping`
+- Should return: `{"status": "OK"}`
+
+**"API authentication failed":**
+- Verify API keys in .env match config.xml files:
+  ```bash
+  # Check current keys
+  grep RADARR_API_KEY .env
+  grep SONARR_API_KEY .env
+  grep PROWLARR_API_KEY .env
+
+  # Compare with config files
+  grep '<ApiKey>' configs/radarr/config.xml
+  grep '<ApiKey>' configs/sonarr/config.xml
+  grep '<ApiKey>' configs/prowlarr/config.xml
+  ```
+- Restart utilities container: `docker compose restart utilities`
+
+**"Utilities container not running":**
+- Check status: `docker compose ps utilities`
+- View logs: `docker compose logs utilities --tail=50`
+- Rebuild: `docker compose build utilities && docker compose up -d utilities`
+
+**"MCP server not found in Claude Code":**
+- Verify config file location (varies by OS):
+  - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+  - Linux: `~/.config/claude/claude_desktop_config.json`
+- Verify exact command is `mcp-arr` (not `mcp-arr-server`)
+- Restart Claude Desktop after config changes
+- Test manually: `docker exec -i utilities-daemon mcp-arr`
+
+**Manual Testing:**
+```bash
+# Test utilities container
+docker compose ps utilities
+# Expected: Up (healthy)
+
+# Test MCP-Arr availability
+docker exec utilities-daemon mcp-arr
+# Expected: "*arr MCP server running - configured services: sonarr, radarr, prowlarr"
+
+# Test API connectivity
+docker exec utilities-daemon wget -qO- http://radarr:7878/ping
+docker exec utilities-daemon wget -qO- http://sonarr:8989/ping
+docker exec utilities-daemon wget -qO- http://prowlarr:9696/ping
+# Expected: {"status": "OK"} for all
+
+# Test compressor still works
+docker exec utilities-daemon python /app/compressor/compressor.py
+# Expected: Compression scan output (or compression operations if files found)
+```
 
 ## Important Notes
 
